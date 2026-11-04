@@ -8,7 +8,7 @@ import (
 )
 
 func (p *Parser) parseUnhandled(tok tokenizer.Token) (ast.Statement, error) {
-	leadingTrivia := p.stream.DumpCollectedTrivia()
+	leadingTrivia := p.dumpTrivia()
 
 	kw := FindUnhandledKeyword(tok.Literal)
 	if kw == nil {
@@ -21,17 +21,22 @@ func (p *Parser) parseUnhandled(tok tokenizer.Token) (ast.Statement, error) {
 	return p.consumeUnhandledLine(tok, leadingTrivia)
 }
 
-func (p *Parser) parseUnhandledDirective(exclTok tokenizer.Token, dirNameTok tokenizer.Token) (ast.Statement, error) {
-	leadingTrivia := p.stream.DumpCollectedTrivia()
+func (p *Parser) parseUnhandledDirective(exclTok tokenizer.Token, dirNameTok tokenizer.Token) ast.Statement {
+	leadingTrivia := p.dumpTrivia()
 
 	kw := FindUnhandledKeyword("!" + dirNameTok.Literal)
 	if kw != nil && kw.Closer != "" {
-		return p.consumeUnhandledBlock(exclTok, *kw, leadingTrivia)
+		stmt, err := p.consumeUnhandledBlock(exclTok, *kw, leadingTrivia)
+		if err != nil {
+			p.ast.RecordError(err, exclTok.Span, stmt)
+		}
+		return stmt
 	}
-	return p.consumeUnhandledLine(exclTok, leadingTrivia)
+	stmt, _ := p.consumeUnhandledLine(exclTok, leadingTrivia)
+	return stmt
 }
 
-func (p *Parser) consumeUnhandledLine(startTok tokenizer.Token, leadingTrivia []tokenizer.Token) (ast.Statement, error) {
+func (p *Parser) consumeUnhandledLine(startTok tokenizer.Token, leadingTrivia []ast.Comment) (ast.Statement, error) {
 	lineToks := p.stream.ConsumeUntilType(tokenizer.NEWLINE)
 
 	endTok := startTok
@@ -49,7 +54,7 @@ func (p *Parser) consumeUnhandledLine(startTok tokenizer.Token, leadingTrivia []
 	}, nil
 }
 
-func (p *Parser) consumeUnhandledBlock(startTok tokenizer.Token, kw UnhandledKeyword, leadingTrivia []tokenizer.Token) (ast.Statement, error) {
+func (p *Parser) consumeUnhandledBlock(startTok tokenizer.Token, kw UnhandledKeyword, leadingTrivia []ast.Comment) (ast.Statement, error) {
 	// Consume remainder of opener line
 	p.stream.ConsumeUntilType(tokenizer.NEWLINE)
 	p.stream.TryConsumeType(tokenizer.NEWLINE)

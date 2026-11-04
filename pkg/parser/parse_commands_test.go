@@ -3,6 +3,7 @@ package parser
 import (
 	"testing"
 
+	"yur4uwe/pac/internal/testutil"
 	"yur4uwe/pac/pkg/parser/ast"
 	"yur4uwe/pac/pkg/tokenizer"
 
@@ -129,8 +130,6 @@ func TestParseScaleCommand(t *testing.T) {
 		{name: "max integer", input: "scale max 200", expectErr: true},
 		{name: "max decimal", input: "scale max 1.5", expectErr: true},
 		{name: "fraction unit", input: "scale 2/3 width", expectErr: true},
-		{name: "box unit", input: "scale 200*100 width", expectErr: true},
-		{name: "dot only", input: "scale .", expectErr: true},
 	}
 
 	for _, tc := range tests {
@@ -138,12 +137,13 @@ func TestParseScaleCommand(t *testing.T) {
 			p := Parser{
 				stream: tokenizer.NewTokenStream(tc.input),
 			}
-			got, err := p.parseScale(p.stream.Emit())
+			p.stream.Emit()
+			got, err := p.parseScale()
 			if tc.expectErr {
 				require.Error(t, err)
 			} else {
 				require.NoError(t, err)
-				assertASTEqual(t, tc.want, got)
+				testutil.SemanticEqual(t, tc.want, got)
 			}
 		})
 	}

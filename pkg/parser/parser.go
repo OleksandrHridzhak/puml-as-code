@@ -31,6 +31,7 @@ type Parser struct {
 func NewParser(d dialect.Dialect) *Parser {
 	return &Parser{
 		Dialect: d,
+		ast:     &ast.Diagram{},
 	}
 }
 
@@ -79,7 +80,7 @@ func (p *Parser) Parse(input string) (*ast.Diagram, error) {
 
 			blockNum++
 
-			startBound, err = p.readDiagramBounds()
+			startBound, err = p.readStartBounds()
 			if err != nil {
 				return nil, err
 			} else if !startBound.IsStart {
@@ -112,31 +113,19 @@ func (p *Parser) Parse(input string) (*ast.Diagram, error) {
 
 	for {
 		// End condition check should be before consuming a token to avoid swallowing '@'
-		if !p.IsBoundless && p.isEndMarker() {
-			boundLeading := p.stream.DumpCollectedTrivia()
-			endBound, err := p.readDiagramBounds()
-			if err != nil {
-				return nil, err
-			}
-			if endBound.IsStart {
-				return nil, NewParserError(p.stream.PeekTokenAt(0), "Unexpected diagram end marker")
-			}
-			if endBound.Type != startBound.Type {
-				return nil, NewParserError(p.stream.PeekTokenAt(0), "Types of starting and ending markers don't match")
-			}
-			endBound.LeadingTrivia = boundLeading
-			p.stream.EmitCommentToks()
-			endBound = ast.WithMetadata(endBound, endBound.NodeSpan, p.stream.DumpCollectedTrivia())
-			p.ast.Statements = append(p.ast.Statements, endBound)
-			break
-		}
-
 		tok := p.stream.Emit()
 		if tok.Type == tokenizer.EOF {
 			if p.IsBoundless {
 				break
 			}
-			return p.ast, WrapParserError(tok, tokenizer.ErrUnexpectedEOF)
+			eofDiagnst := &ast.Diagnostic{
+				ID:      len(p.ast.Diagnostics),
+				Message: tokenizer.ErrUnexpectedEOF.Error(),
+				Span:    p.stream.LastSemanticToken().Span,
+				Err:     tokenizer.ErrUnexpectedEOF,
+			}
+			p.ast.RecordDiagnostic(eofDiagnst)
+			break
 		} else if tok.Type == tokenizer.NEWLINE {
 			// We can leave it like this for now
 			// If the newline is relevant it will be consumed
@@ -154,31 +143,15 @@ func (p *Parser) Parse(input string) (*ast.Diagram, error) {
 		// Handle comments
 		// Handle Identifiers
 
-		mark := p.Mark(tok)
-
-		stmt, err := p.parseDiagramOnlyStatement(tok)
-		if err != nil {
-			return nil, err
+		stmt := p.routeDiagramStatement(tok)
+		p.ast.Statements = append(p.ast.Statements, stmt)
+		if endBound, ok := stmt.(*ast.DiagramBound); ok && !endBound.IsStart {
+			if endBound.Type != startBound.Type {
+				msg := fmt.Errorf("types of starting and ending markers don't match")
+				p.ast.RecordError(msg, endBound.NodeSpan, endBound)
+			}
+			break
 		}
-		if stmt != nil {
-			p.stream.EmitCommentToks()
-			stmt = ast.WithMetadata(stmt, p.Span(mark), p.stream.DumpCollectedTrivia())
-			p.ast.Statements = append(p.ast.Statements, stmt)
-			continue
-		}
-
-		stmt, err = p.parseContainerStatement(tok)
-		if err != nil {
-			return nil, err
-		}
-		if stmt != nil {
-			p.stream.EmitCommentToks()
-			stmt = ast.WithMetadata(stmt, p.Span(mark), p.stream.DumpCollectedTrivia())
-			p.ast.Statements = append(p.ast.Statements, stmt)
-			continue
-		}
-
-		return nil, NewParserError(tok, "Unexpected token")
 	}
 
 	if p.TargetID == "" {
@@ -190,29 +163,32 @@ func (p *Parser) Parse(input string) (*ast.Diagram, error) {
 		}
 	}
 
+	if p.ast.HasErrors() {
+		return p.ast, p.ast.Diagnostics
+	}
 	return p.ast, nil
 }
 
 func (p *Parser) parseContainerStatement(tok tokenizer.Token) (ast.Statement, error) {
 	if tok.Type == tokenizer.EXCLAMATION {
-		return p.parseDirective(tok)
+		return p.parseDirective(tok), nil
 	}
 
-	if p.HasArrowOnLine() {
-		return p.parseRelationship(tok)
+	if stmt, err := p.disambiguateIdent(tok); stmt != nil || err != nil {
+		return stmt, err
 	}
 
 	switch keyword.Classify(tok.Literal) {
 	case keyword.Header,
 		keyword.Footer,
 		keyword.Legend:
-		return p.parseLayoutStatement(tok, nil)
+		return p.parseLayoutStatement(tok, nil), nil
 	case keyword.Direction:
 		nextTok := p.stream.PeekTokenAt(0)
 		nextKW := keyword.Classify(nextTok.Literal)
 		if nextKW == keyword.Header || nextKW == keyword.Footer || nextKW == keyword.Legend || nextKW == keyword.Title {
 			actualKwTok := p.stream.Emit()
-			return p.parseLayoutStatement(actualKwTok, &tok)
+			return p.parseLayoutStatement(actualKwTok, &tok), nil
 		}
 		return nil, NewParserError(tok, "Unexpected direction keyword in container")
 	case keyword.Caption, keyword.Sprite:
@@ -229,7 +205,7 @@ func (p *Parser) parseContainerStatement(tok tokenizer.Token) (ast.Statement, er
 		keyword.Protocol,
 		keyword.Entity:
 		// Class-like Entities
-		return p.parseEntity(tok)
+		return p.parseEntity(tok), nil
 	// Containers
 	case keyword.Package,
 		keyword.Together,
@@ -240,61 +216,59 @@ func (p *Parser) parseContainerStatement(tok tokenizer.Token) (ast.Statement, er
 		keyword.Database,
 		keyword.Namespace,
 		keyword.Node:
-		return p.parseContainer(tok)
+		return p.parseContainer(tok), nil
 	case keyword.Circle, keyword.Diamond, keyword.Metaclass, keyword.Stereotype:
 		return nil, NewParserError(tok, "unimplemented entity keyword handling")
 	// Special Keywords
 	case keyword.Note:
-		return p.parseNote(tok)
+		return p.parseNote(), nil
 	}
 
-	switch tok.Type {
-	case tokenizer.IDENTIFIER:
-		return p.parseInlineMember(tok)
-	default:
-		return nil, nil
-	}
+	return nil, nil
 }
 
 func (p *Parser) parseDiagramOnlyStatement(tok tokenizer.Token) (ast.Statement, error) {
+	if !p.IsBoundless && p.isDiagramEndMarker(tok) {
+		return p.readEndBounds(tok)
+	}
 	if tok.Type == tokenizer.LANGLE && p.stream.AssertSeq([]tokenizer.Token{amb(tokenizer.IDENTIFIER, "style"), unamb(tokenizer.RANGLE)}) {
-		return p.parseStyleBlock(tok)
+		return p.parseStyleBlock(), nil
 	}
 	if tok.Type == tokenizer.EXCLAMATION {
-		return p.parseDirective(tok)
+		return p.parseDirective(tok), nil
 	}
 
-	if p.HasArrowOnLine() {
-		return p.parseRelationship(tok)
+	if stmt, err := p.disambiguateIdent(tok); stmt != nil || err != nil {
+		return stmt, err
 	}
 
 	switch keyword.Classify(tok.Literal) {
 	case keyword.Skinparam:
-		return p.parseSkinparamRoot(tok)
+		return p.parseSkinparamRoot(tok), nil
 	case keyword.Title,
 		keyword.Header,
 		keyword.Footer,
 		keyword.Legend:
-		return p.parseLayoutStatement(tok, nil)
+		return p.parseLayoutStatement(tok, nil), nil
 	case keyword.Hide, keyword.Show, keyword.Remove, keyword.Restore:
-		return p.parseVisibilityCommand(tok)
+		return p.parseVisibilityCommand(tok), nil
 	case keyword.Scale:
-		return p.parseScale(tok)
+		return p.parseScale()
 	case keyword.Direction:
 		nextTok := p.stream.PeekTokenAt(0)
 		if nextTok.Literal == "to" {
-			return p.parseDiagDirection(tok)
+			return p.parseDiagDirection(tok), nil
 		} else if nextKW := keyword.Classify(nextTok.Literal); nextKW == keyword.Header ||
 			nextKW == keyword.Footer ||
 			nextKW == keyword.Legend ||
 			nextKW == keyword.Title {
 			actualKwTok := p.stream.Emit()
-			return p.parseLayoutStatement(actualKwTok, &tok)
+			return p.parseLayoutStatement(actualKwTok, &tok), nil
 		} else {
 			return nil, NewParserError(tok, "Unexpected token after direction")
 		}
 	case keyword.Set:
-		return p.parseSetDirective(tok)
+		return p.parseSetCommand(), nil
 	}
 
 	return nil, nil

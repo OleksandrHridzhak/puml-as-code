@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -11,13 +10,8 @@ import (
 	"yur4uwe/pac/pkg/tokenizer"
 )
 
-func (p *Parser) parseVisibilityCommand(tok tokenizer.Token) (*ast.VisibilityCommand, error) {
-	cmd := &ast.VisibilityCommand{
-		Kind: ast.VisibilityCMDUnknown,
-		BaseNode: ast.BaseNode{
-			LeadingTrivia: p.stream.DumpCollectedTrivia(),
-		},
-	}
+func (p *Parser) parseVisibilityCommand(tok tokenizer.Token) *ast.VisibilityCommand {
+	cmd := &ast.VisibilityCommand{}
 	switch keyword.Classify(tok.Literal) {
 	case keyword.Hide:
 		cmd.Kind = ast.VisibilityCMDHide
@@ -27,12 +21,21 @@ func (p *Parser) parseVisibilityCommand(tok tokenizer.Token) (*ast.VisibilityCom
 		cmd.Kind = ast.VisibilityCMDRemove
 	case keyword.Restore:
 		cmd.Kind = ast.VisibilityCMDRestore
+	default:
+		panic("visibility command: unreachable")
 	}
 	cmd.Target = p.stream.ReadUntilNewline()
-	return cmd, nil
+	if len(cmd.Target) == 0 {
+		nextTok := p.stream.PeekTokenAt(0)
+		err := NewParserError(nextTok, "empty target for visibility command")
+		p.ast.RecordError(
+			err, nextTok.Span, cmd,
+		)
+	}
+	return cmd
 }
 
-func (p *Parser) parseDiagDirection(tok tokenizer.Token) (*ast.DirectionCommand, error) {
+func (p *Parser) parseDiagDirection(tok tokenizer.Token) *ast.DirectionCommand {
 	var to string
 	switch tok.Literal {
 	case "left":
@@ -56,16 +59,20 @@ func (p *Parser) parseDiagDirection(tok tokenizer.Token) (*ast.DirectionCommand,
 		},
 	}
 
-	cmd := &ast.DirectionCommand{
-		BaseNode: ast.BaseNode{
-			LeadingTrivia: p.stream.DumpCollectedTrivia(),
-		},
-	}
+	cmd := &ast.DirectionCommand{}
 
 	for _, token := range expectedSeq {
-		if _, ok := p.stream.TryConsume(token); !ok {
-			return nil, NewParserError(token, "Unexpected diagram direction modifier")
+		if _, ok := p.stream.TryConsume(token); ok {
+			continue
 		}
+
+		nextToken := p.stream.PeekTokenAt(0)
+		err := NewParserError(nextToken, "Unexpected diagram direction modifier")
+		p.ast.RecordError(
+			err, nextToken.Span, cmd,
+		)
+		p.syncToLineEnd()
+		return cmd
 	}
 	switch tok.Literal {
 	case "left":
@@ -74,9 +81,14 @@ func (p *Parser) parseDiagDirection(tok tokenizer.Token) (*ast.DirectionCommand,
 		cmd.Direction = ast.TopToBottomDirection
 	}
 	if !p.stream.AssertType(tokenizer.NEWLINE) {
-		return nil, NewParserError(p.stream.PeekTokenAt(0), "Unexpected tokens after direction command")
+		nextToken := p.stream.PeekTokenAt(0)
+		err := NewParserError(nextToken, "Unexpected tokens after direction command")
+		p.ast.RecordError(
+			err, nextToken.Span, cmd,
+		)
+		p.syncToLineEnd()
 	}
-	return cmd, nil
+	return cmd
 }
 
 func (p *Parser) extractScaleTokens() (lhs, sep, rhs, unit string, err error) {
@@ -92,11 +104,7 @@ func isDecimalFloat(s string) bool {
 }
 
 func (p *Parser) parseScaleTrial(startTok tokenizer.Token) (*ast.ScaleCommand, error) {
-	cmd := &ast.ScaleCommand{
-		BaseNode: ast.BaseNode{
-			LeadingTrivia: p.stream.DumpCollectedTrivia(),
-		},
-	}
+	cmd := &ast.ScaleCommand{}
 	if _, ok := p.stream.TryConsume(tokenizer.Token{Type: tokenizer.IDENTIFIER, Literal: "max"}); ok {
 		cmd.IsMax = true
 	}
@@ -153,12 +161,8 @@ func (p *Parser) parseScaleTrial(startTok tokenizer.Token) (*ast.ScaleCommand, e
 	return cmd, nil
 }
 
-func (p *Parser) parseScale(startTok tokenizer.Token) (*ast.ScaleCommand, error) {
-	cmd := &ast.ScaleCommand{
-		BaseNode: ast.BaseNode{
-			LeadingTrivia: p.stream.DumpCollectedTrivia(),
-		},
-	}
+func (p *Parser) parseScale() (*ast.ScaleCommand, error) {
+	cmd := &ast.ScaleCommand{}
 	if _, ok := p.stream.TryConsume(tokenizer.Token{Type: tokenizer.IDENTIFIER, Literal: "max"}); ok {
 		cmd.IsMax = true
 	}
@@ -356,8 +360,7 @@ func (p *Parser) parseScale(startTok tokenizer.Token) (*ast.ScaleCommand, error)
 	return cmd, nil
 }
 
-func (p *Parser) parseSetDirective(startTok tokenizer.Token) (ast.Statement, error) {
-	leadingTrivia := p.stream.DumpCollectedTrivia()
+func (p *Parser) parseSetCommand() *ast.SetCommand {
 	keyTok := p.stream.Emit() // consume "separator"
 
 	toks := p.stream.ConsumeUntilType(tokenizer.NEWLINE)
@@ -377,50 +380,48 @@ func (p *Parser) parseSetDirective(startTok tokenizer.Token) (ast.Statement, err
 	return &ast.SetCommand{
 		Key:   keyTok.Literal,
 		Value: directiveVal,
-		BaseNode: ast.BaseNode{
-			LeadingTrivia: leadingTrivia,
-		},
-	}, nil
+	}
 }
+
 func parseLayoutAlignmentToken(tok tokenizer.Token, blockKind ast.TextBlockKind) (horiz string, vert string, isAlign bool) {
 	switch strings.ToLower(tok.Literal) {
 	case "left", "right", "center":
 		return strings.ToLower(tok.Literal), "", true
 	case "top", "bottom":
+		isAlign = true
 		if blockKind != ast.BlockLegend {
-			return "", "", false
+			isAlign = false
 		}
-		return "", strings.ToLower(tok.Literal), true
+		return "", strings.ToLower(tok.Literal), isAlign
 	default:
 		return "", "", false
 	}
 }
 
-func (p *Parser) parseLayoutStatement(kwTok tokenizer.Token, prefixAlignment *tokenizer.Token) (ast.Statement, error) {
+func (p *Parser) parseLayoutStatement(kwTok tokenizer.Token, prefixAlignment *tokenizer.Token) *ast.TextBlock {
 	blockKind := mapKwTokToTextBlockKind(keyword.Classify(kwTok.Literal))
-	leadingTrivia := p.stream.DumpCollectedTrivia()
 
 	block := &ast.TextBlock{
 		Kind: blockKind,
-		BaseNode: ast.BaseNode{
-			LeadingTrivia: leadingTrivia,
-		},
 	}
 
 	// Process prefix alignment if provided (e.g. "left header", "center footer")
-	if prefixAlignment != nil {
-		if blockKind == ast.BlockTitle {
-			return nil, NewParserError(*prefixAlignment, "Title alignment not supported")
-		}
+	if prefixAlignment != nil && blockKind != ast.BlockTitle {
 		h, v, isAlign := parseLayoutAlignmentToken(*prefixAlignment, blockKind)
 		if !isAlign {
-			if strings.EqualFold(prefixAlignment.Literal, "top") || strings.EqualFold(prefixAlignment.Literal, "bottom") {
-				return nil, NewParserError(*prefixAlignment, "Vertical alignment only supported for legend")
+			var err error
+			if len(v) > 0 {
+				err = NewParserError(*prefixAlignment, "Vertical alignment only supported for legend")
+			} else {
+				err = NewParserError(*prefixAlignment, "Invalid alignment")
 			}
-			return nil, NewParserError(*prefixAlignment, "Invalid alignment")
+			p.ast.RecordError(err, *&prefixAlignment.Span, block)
 		}
 		block.HorizontalAlignment = h
 		block.VerticalAlignment = v
+	} else if prefixAlignment != nil && blockKind == ast.BlockTitle {
+		err := NewParserError(*prefixAlignment, "Title alignment not supported")
+		p.ast.RecordError(err, *&prefixAlignment.Span, block)
 	}
 
 	// Consume any trailing alignment modifiers on the opener line (e.g. "legend top left", "header center")
@@ -435,18 +436,19 @@ func (p *Parser) parseLayoutStatement(kwTok tokenizer.Token, prefixAlignment *to
 		}
 		if h != "" {
 			if block.HorizontalAlignment != "" {
-				return nil, NewParserError(peekTok, "Horizontal alignment already set")
+				err := NewParserError(peekTok, "Horizontal alignment already set")
+				p.ast.RecordError(err, peekTok.Span, block)
+			} else {
+				block.HorizontalAlignment = h
 			}
-			block.HorizontalAlignment = h
 			p.stream.Emit()
 		} else if v != "" {
 			if block.VerticalAlignment != "" {
-				return nil, NewParserError(peekTok, "Vertical alignment already set")
+				err := NewParserError(peekTok, "Vertical alignment already set")
+				p.ast.RecordError(err, peekTok.Span, block)
+			} else {
+				block.VerticalAlignment = v
 			}
-			if blockKind != ast.BlockLegend {
-				return nil, NewParserError(peekTok, "Vertical alignment only supported for legend")
-			}
-			block.VerticalAlignment = v
 			p.stream.Emit()
 		}
 	}
@@ -459,10 +461,9 @@ func (p *Parser) parseLayoutStatement(kwTok tokenizer.Token, prefixAlignment *to
 		var err error
 		body, err = p.stream.ConsumeTextBlock("end", kwTok.Literal)
 		if err != nil {
-			if errors.Is(err, tokenizer.ErrScopeDelimiterHit) {
-				return nil, NewParserErrorf(kwTok, "unterminated block statement for %s (hit enclosing scope delimiter)", kwTok.Literal)
-			}
-			return nil, NewParserErrorf(kwTok, "unterminated block statement for %s", kwTok.Literal)
+			err := ast.NewUnclosedBlockError(kwTok.Literal, "end "+kwTok.Literal)
+			p.ast.RecordError(err, kwTok.Span, block)
+			return block
 		}
 	} else {
 		// --- SINGLE-LINE INLINE FORM ---
@@ -473,5 +474,5 @@ func (p *Parser) parseLayoutStatement(kwTok tokenizer.Token, prefixAlignment *to
 	if blockKind == ast.BlockTitle {
 		p.ast.Title = block.Text
 	}
-	return block, nil
+	return block
 }
