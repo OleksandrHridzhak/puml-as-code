@@ -4,9 +4,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"yur4uwe/pac/internal/testutil"
 	"yur4uwe/pac/pkg/parser/ast"
-	"yur4uwe/pac/pkg/tokenizer/keyword"
 	"yur4uwe/pac/pkg/tokenizer"
+	"yur4uwe/pac/pkg/tokenizer/keyword"
 )
 
 // -----------------------------------------------------------------------------
@@ -121,51 +122,92 @@ func TestParseSkinparamSingleLine(t *testing.T) {
 
 func TestParseSkinparam_Errors(t *testing.T) {
 	tests := []struct {
-		name           string
-		input          string
-		bs             expectedBlockState
-		errContains    string
-		wantStatements int
+		name        string
+		input       string
+		bs          expectedBlockState
+		errContains string
+		want        ast.Statement
 	}{
 		{
 			name:        "missing target after skinparam",
 			input:       "skinparam\n",
 			bs:          expectNoBlock,
 			errContains: "Expected target or parameter after skinparam",
+			want: &ast.SkinparamSetting{
+				Keyword: "skinparam",
+			},
 		},
 		{
 			name:        "invalid target at root",
 			input:       "skinparam @invalid\n",
 			bs:          expectNoBlock,
 			errContains: "expected valid skinparam target name",
+			want: &ast.SkinparamSetting{
+				Keyword: "skinparam",
+			},
 		},
 		{
-			name:           "unterminated block error",
-			input:          "skinparam class {\n BackgroundColor red\n",
-			bs:             expectBlockUnclosed,
-			errContains:    "unclosed skinparam: expected }",
-			wantStatements: 1,
+			name:        "unterminated block error",
+			input:       "skinparam class {\n BackgroundColor red\n",
+			bs:          expectBlockUnclosed,
+			errContains: "unclosed skinparam: expected }",
+			want: &ast.SkinparamBlock{
+				Keyword: "skinparam",
+				Name:    ast.Ident{Literal: "class"},
+				Statements: []ast.Statement{
+					&ast.SkinparamSetting{
+						Name:  ast.Ident{Literal: "BackgroundColor"},
+						Value: "red",
+					},
+				},
+			},
 		},
 		{
-			name:           "unterminated empty block",
-			input:          "skinparam class {\n",
-			bs:             expectBlockUnclosed,
-			errContains:    "unclosed skinparam: expected }",
-			wantStatements: 0,
+			name:        "unterminated empty block",
+			input:       "skinparam class {\n",
+			bs:          expectBlockUnclosed,
+			errContains: "unclosed skinparam: expected }",
+			want: &ast.SkinparamBlock{
+				Keyword: "skinparam",
+				Name:    ast.Ident{Literal: "class"},
+			},
 		},
 		{
-			name:           "unexpected token inside block",
-			input:          "skinparam class {\n @invalid\n BackgroundColor red\n}\n",
-			bs:             expectBlockClosed,
-			errContains:    "expected valid skinparam target name",
-			wantStatements: 1,
+			name:        "unexpected token inside block",
+			input:       "skinparam class {\n @invalid\n BackgroundColor red\n}\n",
+			bs:          expectBlockClosed,
+			errContains: "expected valid skinparam target name",
+			want: &ast.SkinparamBlock{
+				Keyword: "skinparam",
+				Name:    ast.Ident{Literal: "class"},
+				Statements: []ast.Statement{
+					&ast.SkinparamSetting{
+						Name:  ast.Ident{Literal: "BackgroundColor"},
+						Value: "red",
+					},
+				},
+			},
 		},
 		{
-			name:           "unterminated nested block",
-			input:          "skinparam class {\n header {\n FontSize 12\n",
-			bs:             expectBlockUnclosed,
-			errContains:    "unclosed skinparam: expected }",
-			wantStatements: 1,
+			name:        "unterminated nested block",
+			input:       "skinparam class {\n header {\n FontSize 12\n",
+			bs:          expectBlockUnclosed,
+			errContains: "unclosed skinparam: expected }",
+			want: &ast.SkinparamBlock{
+				Keyword: "skinparam",
+				Name:    ast.Ident{Literal: "class"},
+				Statements: []ast.Statement{
+					&ast.SkinparamBlock{
+						Name: ast.Ident{Literal: "header"},
+						Statements: []ast.Statement{
+							&ast.SkinparamSetting{
+								Name:  ast.Ident{Literal: "FontSize"},
+								Value: "12",
+							},
+						},
+					},
+				},
+			},
 		},
 	}
 
@@ -187,35 +229,53 @@ func TestParseSkinparam_Errors(t *testing.T) {
 				block, ok := stmt.(*ast.SkinparamBlock)
 				require.True(t, ok)
 				assertBlockClosed(t, block)
-				require.Len(t, block.Statements, tc.wantStatements)
 			case expectBlockUnclosed:
 				block, ok := stmt.(*ast.SkinparamBlock)
 				require.True(t, ok)
 				assertBlockUnclosed(t, block)
-				require.Len(t, block.Statements, tc.wantStatements)
 			}
+
+			testutil.SemanticEqual(t, tc.want, stmt)
 		})
 	}
 }
 
 func TestParseSkinparam_Recovery(t *testing.T) {
 	tests := []struct {
-		name           string
-		input          string
-		bs             expectedBlockState
-		wantStatements int
+		name  string
+		input string
+		bs    expectedBlockState
+		want  ast.Statement
 	}{
 		{
-			name:           "restore to next property on invalid token",
-			input:          "skinparam class {\n @invalid\n BackgroundColor PaleGreen\n}\nclass NextClass",
-			bs:             expectBlockClosed,
-			wantStatements: 1,
+			name:  "restore to next property on invalid token",
+			input: "skinparam class {\n @invalid\n BackgroundColor PaleGreen\n}\nclass NextClass",
+			bs:    expectBlockClosed,
+			want: &ast.SkinparamBlock{
+				Keyword: "skinparam",
+				Name:    ast.Ident{Literal: "class"},
+				Statements: []ast.Statement{
+					&ast.SkinparamSetting{
+						Name:  ast.Ident{Literal: "BackgroundColor"},
+						Value: "PaleGreen",
+					},
+				},
+			},
 		},
 		{
-			name:           "unterminated block at eof preserves statements",
-			input:          "skinparam class {\n BackgroundColor PaleGreen\n",
-			bs:             expectBlockUnclosed,
-			wantStatements: 1,
+			name:  "unterminated block at eof preserves statements",
+			input: "skinparam class {\n BackgroundColor PaleGreen\n",
+			bs:    expectBlockUnclosed,
+			want: &ast.SkinparamBlock{
+				Keyword: "skinparam",
+				Name:    ast.Ident{Literal: "class"},
+				Statements: []ast.Statement{
+					&ast.SkinparamSetting{
+						Name:  ast.Ident{Literal: "BackgroundColor"},
+						Value: "PaleGreen",
+					},
+				},
+			},
 		},
 	}
 
@@ -228,7 +288,8 @@ func TestParseSkinparam_Recovery(t *testing.T) {
 
 			block, ok := stmt.(*ast.SkinparamBlock)
 			require.True(t, ok)
-			require.Len(t, block.Statements, tc.wantStatements)
+
+			testutil.SemanticEqual(t, tc.want, stmt)
 
 			if tc.bs == expectBlockUnclosed {
 				assertBlockUnclosed(t, block)

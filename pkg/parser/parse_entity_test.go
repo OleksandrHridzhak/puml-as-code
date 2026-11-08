@@ -6,9 +6,9 @@ import (
 	"yur4uwe/pac/internal/testutil"
 	"yur4uwe/pac/pkg/parser/ast"
 	"yur4uwe/pac/pkg/parser/dialect"
-	"yur4uwe/pac/pkg/tokenizer/keyword"
 	"yur4uwe/pac/pkg/stream"
 	"yur4uwe/pac/pkg/tokenizer"
+	"yur4uwe/pac/pkg/tokenizer/keyword"
 
 	"github.com/stretchr/testify/require"
 )
@@ -202,6 +202,7 @@ func TestParseEntity_Errors(t *testing.T) {
 		input     string
 		bs        expectedBlockState
 		wantDiags []expectedDiag
+		want      *ast.Entity
 	}{
 		{
 			name:  "class with invalid alias (not a string)",
@@ -216,6 +217,10 @@ func TestParseEntity_Errors(t *testing.T) {
 						End:   tokenizer.Pos{Line: 0, Col: 20, Offset: 19},
 					},
 				},
+			},
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
 			},
 		},
 		{
@@ -232,6 +237,10 @@ func TestParseEntity_Errors(t *testing.T) {
 					},
 				},
 			},
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+			},
 		},
 		{
 			name:  "unclosed stereotype",
@@ -247,6 +256,30 @@ func TestParseEntity_Errors(t *testing.T) {
 					},
 				},
 			},
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+			},
+		},
+		{
+			name:  "unclosed stereotype with generic already set",
+			input: "class MyClass<T> <<Stereo",
+			bs:    expectNoBlock,
+			wantDiags: []expectedDiag{
+				{
+					Severity: ast.SeverityError,
+					Msg:      "unexpected EOF",
+					Span: tokenizer.SourceSpan{
+						Start: tokenizer.Pos{Line: 0, Col: 18, Offset: 17},
+						End:   tokenizer.Pos{Line: 0, Col: 26, Offset: 25},
+					},
+				},
+			},
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+				Generic:    "T",
+			},
 		},
 		{
 			name:  "unclosed body",
@@ -259,6 +292,38 @@ func TestParseEntity_Errors(t *testing.T) {
 					Span: tokenizer.SourceSpan{
 						Start: tokenizer.Pos{Line: 0, Col: 15, Offset: 14},
 						End:   tokenizer.Pos{Line: 0, Col: 16, Offset: 15},
+					},
+				},
+			},
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+			},
+		},
+		{
+			name:  "unclosed body with member",
+			input: "class MyClass {\n  +field int\n",
+			bs:    expectBlockUnclosed,
+			wantDiags: []expectedDiag{
+				{
+					Severity: ast.SeverityError,
+					Msg:      "unclosed class: expected }",
+					Span: tokenizer.SourceSpan{
+						Start: tokenizer.Pos{Line: 0, Col: 15, Offset: 14},
+						End:   tokenizer.Pos{Line: 1, Col: 0, Offset: 15},
+					},
+				},
+			},
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+				Members: []ast.Member{
+					&ast.FieldDeclaration{
+						Visibility: ast.VisibilityPublic,
+						Field: &dialect.GoField{
+							Name: "field",
+							Type: dialect.NamedRef("int"),
+						},
 					},
 				},
 			},
@@ -288,124 +353,214 @@ func TestParseEntity_Errors(t *testing.T) {
 			}
 
 			assertDiagsEqual(t, tc.wantDiags, p.ast.Diagnostics, got)
+			testutil.SemanticEqual(t, tc.want, got)
 		})
 	}
 }
 
 func TestParseEntity_Recovery(t *testing.T) {
+	fieldMember := &ast.FieldDeclaration{
+		Visibility: ast.VisibilityPublic,
+		Field: &dialect.GoField{
+			Name: "field",
+			Type: dialect.NamedRef("int"),
+		},
+	}
+
 	tests := []struct {
-		name        string
-		input       string
-		bs          expectedBlockState
-		wantMembers int
+		name  string
+		input string
+		bs    expectedBlockState
+		want  *ast.Entity
 	}{
 		{
-			name:        "restore to opening brace on invalid alias with block",
-			input:       "class MyClass as InvalidAlias {\n  +field int\n}\nclass NextClass",
-			bs:          expectBlockClosed,
-			wantMembers: 1,
+			name:  "restore to opening brace on invalid alias with block",
+			input: "class MyClass as InvalidAlias {\n  +field int\n}\nclass NextClass",
+			bs:    expectBlockClosed,
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+				Members:    []ast.Member{fieldMember},
+			},
 		},
 		{
-			name:        "restore to opening brace on invalid alias with extra tokens before block",
-			input:       "class MyClass as InvalidAlias extra junk tokens {\n  +field int\n}\nclass NextClass",
-			bs:          expectBlockClosed,
-			wantMembers: 1,
+			name:  "restore to opening brace on invalid alias with extra tokens before block",
+			input: "class MyClass as InvalidAlias extra junk tokens {\n  +field int\n}\nclass NextClass",
+			bs:    expectBlockClosed,
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+				Members:    []ast.Member{fieldMember},
+			},
 		},
 		{
-			name:        "restore to opening brace on bad name token with block",
-			input:       "class 123 {\n  +field int\n}\nclass NextClass",
-			bs:          expectBlockClosed,
-			wantMembers: 1,
+			name:  "restore to opening brace on bad name token with block",
+			input: "class 123 {\n  +field int\n}\nclass NextClass",
+			bs:    expectBlockClosed,
+			want: &ast.Entity{
+				Kind:    ast.EntityClass,
+				Members: []ast.Member{fieldMember},
+			},
 		},
 		{
-			name:        "restore to opening brace on unexpected member in target ref with block",
-			input:       "class Foo.Bar() {\n  +field int\n}\nclass NextClass",
-			bs:          expectBlockClosed,
-			wantMembers: 1,
+			name:  "restore to opening brace on unexpected member in target ref with block",
+			input: "class Foo.Bar() {\n  +field int\n}\nclass NextClass",
+			bs:    expectBlockClosed,
+			want: &ast.Entity{
+				Kind:    ast.EntityClass,
+				Members: []ast.Member{fieldMember},
+			},
 		},
 		{
-			name:        "restore to opening brace on unclosed stereotype with block",
-			input:       "class MyClass <<unclosed {\n  +field int\n}\nclass NextClass",
-			bs:          expectBlockClosed,
-			wantMembers: 1,
+			name:  "restore to opening brace on unclosed stereotype with block",
+			input: "class MyClass <<unclosed {\n  +field int\n}\nclass NextClass",
+			bs:    expectBlockClosed,
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+				Members:    []ast.Member{fieldMember},
+			},
 		},
 		{
-			name:        "restore to opening brace on unclosed generic with block",
-			input:       "class MyClass <unclosed {\n  +field int\n}\nclass NextClass",
-			bs:          expectBlockClosed,
-			wantMembers: 1,
+			name:  "restore to opening brace on unclosed generic with block",
+			input: "class MyClass <unclosed {\n  +field int\n}\nclass NextClass",
+			bs:    expectBlockClosed,
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+				Members:    []ast.Member{fieldMember},
+			},
 		},
 		{
-			name:        "restore to opening brace on missing tag identifier with block",
-			input:       "class MyClass $ {\n  +field int\n}\nclass NextClass",
-			bs:          expectBlockClosed,
-			wantMembers: 1,
+			name:  "restore to opening brace on missing tag identifier with block",
+			input: "class MyClass $ {\n  +field int\n}\nclass NextClass",
+			bs:    expectBlockClosed,
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+				Members:    []ast.Member{fieldMember},
+			},
 		},
 		{
-			name:        "restore to opening brace on bad alias with generic, tags, and stereotype",
-			input:       "class MyClass as InvalidAlias <T> $tag <<stereo>> {\n  +field int\n}\nclass NextClass",
-			bs:          expectBlockClosed,
-			wantMembers: 1,
+			name:  "restore to opening brace on bad alias with generic, tags, and stereotype",
+			input: "class MyClass as InvalidAlias <T> $tag <<stereo>> {\n  +field int\n}\nclass NextClass",
+			bs:    expectBlockClosed,
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+				Members:    []ast.Member{fieldMember},
+			},
 		},
 		{
-			name:        "restore to opening brace on bad syntax with unclosed block",
-			input:       "class MyClass as InvalidAlias {\n  +field int\n",
-			bs:          expectBlockUnclosed,
-			wantMembers: 1,
+			name:  "restore to opening brace on bad syntax with unclosed block",
+			input: "class MyClass as InvalidAlias {\n  +field int\n",
+			bs:    expectBlockUnclosed,
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+				Members:    []ast.Member{fieldMember},
+			},
 		},
 		{
-			name:        "restore to newline on invalid alias without block",
-			input:       "class MyClass as InvalidAlias\nclass NextClass",
-			bs:          expectNoBlock,
-			wantMembers: 0,
+			name:  "restore to opening brace preserving alias on unclosed generic with block",
+			input: "class MyClass as \"MC\" <unclosed {\n  +field int\n}\nclass NextClass",
+			bs:    expectBlockClosed,
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Alias:      tokString("MC"),
+				Kind:       ast.EntityClass,
+				Members:    []ast.Member{fieldMember},
+			},
 		},
 		{
-			name:        "restore to newline on invalid alias with extra tokens without block",
-			input:       "class MyClass as InvalidAlias extra junk tokens\nclass NextClass",
-			bs:          expectNoBlock,
-			wantMembers: 0,
+			name:  "restore to opening brace preserving generic on unclosed stereotype with block",
+			input: "class MyClass <T> <<unclosed {\n  +field int\n}\nclass NextClass",
+			bs:    expectBlockClosed,
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+				Generic:    "T",
+				Members:    []ast.Member{fieldMember},
+			},
 		},
 		{
-			name:        "restore to newline on bad name token without block",
-			input:       "class 123 extra junk\nclass NextClass",
-			bs:          expectNoBlock,
-			wantMembers: 0,
+			name:  "restore to newline on invalid alias without block",
+			input: "class MyClass as InvalidAlias\nclass NextClass",
+			bs:    expectNoBlock,
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+			},
 		},
 		{
-			name:        "restore to newline on unexpected member in target ref without block",
-			input:       "class Foo.Bar() extra junk\nclass NextClass",
-			bs:          expectNoBlock,
-			wantMembers: 0,
+			name:  "restore to newline on invalid alias with extra tokens without block",
+			input: "class MyClass as InvalidAlias extra junk tokens\nclass NextClass",
+			bs:    expectNoBlock,
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+			},
 		},
 		{
-			name:        "restore to newline on unclosed generic without block",
-			input:       "class MyClass <unclosed generic\nclass NextClass",
-			bs:          expectNoBlock,
-			wantMembers: 0,
+			name:  "restore to newline on bad name token without block",
+			input: "class 123 extra junk\nclass NextClass",
+			bs:    expectNoBlock,
+			want: &ast.Entity{
+				Kind: ast.EntityClass,
+			},
 		},
 		{
-			name:        "restore to newline on unclosed stereotype without block",
-			input:       "class MyClass <<unclosed stereotype\nclass NextClass",
-			bs:          expectNoBlock,
-			wantMembers: 0,
+			name:  "restore to newline on unexpected member in target ref without block",
+			input: "class Foo.Bar() extra junk\nclass NextClass",
+			bs:    expectNoBlock,
+			want: &ast.Entity{
+				Kind: ast.EntityClass,
+			},
 		},
 		{
-			name:        "restore to newline on missing tag identifier without block",
-			input:       "class MyClass $\nclass NextClass",
-			bs:          expectNoBlock,
-			wantMembers: 0,
+			name:  "restore to newline on unclosed generic without block",
+			input: "class MyClass <unclosed generic\nclass NextClass",
+			bs:    expectNoBlock,
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+			},
 		},
 		{
-			name:        "restore to newline on invalid tag token without block",
-			input:       "class MyClass $123\nclass NextClass",
-			bs:          expectNoBlock,
-			wantMembers: 0,
+			name:  "restore to newline on unclosed stereotype without block",
+			input: "class MyClass <<unclosed stereotype\nclass NextClass",
+			bs:    expectNoBlock,
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+			},
 		},
 		{
-			name:        "restore to newline on bad alias with generic, tags, and stereotype",
-			input:       "class MyClass as InvalidAlias <T> $tag <<stereo>>\nclass NextClass",
-			bs:          expectNoBlock,
-			wantMembers: 0,
+			name:  "restore to newline on missing tag identifier without block",
+			input: "class MyClass $\nclass NextClass",
+			bs:    expectNoBlock,
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+			},
+		},
+		{
+			name:  "restore to newline on invalid tag token without block",
+			input: "class MyClass $123\nclass NextClass",
+			bs:    expectNoBlock,
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+			},
+		},
+		{
+			name:  "restore to newline on bad alias with generic, tags, and stereotype",
+			input: "class MyClass as InvalidAlias <T> $tag <<stereo>>\nclass NextClass",
+			bs:    expectNoBlock,
+			want: &ast.Entity{
+				Identifier: identRef("MyClass"),
+				Kind:       ast.EntityClass,
+			},
 		},
 	}
 
@@ -426,14 +581,13 @@ func TestParseEntity_Recovery(t *testing.T) {
 			switch tc.bs {
 			case expectNoBlock:
 				assertBlockBodyless(t, got)
-				require.Empty(t, got.Members)
 			case expectBlockClosed:
 				assertBlockClosed(t, got)
-				require.Len(t, got.Members, tc.wantMembers)
 			case expectBlockUnclosed:
 				assertBlockUnclosed(t, got)
-				require.Len(t, got.Members, tc.wantMembers)
 			}
+
+			testutil.SemanticEqual(t, tc.want, got)
 
 			// Verify the parser restored its state to the opening brace or newline
 			if tc.bs == expectBlockUnclosed {
@@ -826,63 +980,62 @@ func TestParseInlineMember_Errors(t *testing.T) {
 }
 
 func TestParseInlineMember_Recovery(t *testing.T) {
-	t.Run("diagram level recovers past malformed inline member", func(t *testing.T) {
-		input := `@startuml
-ValidA : +id string
-User : !@#$ invalid syntax
-ValidB : +name string
-@enduml`
+	t.Run("statement level recovers past malformed inline member", func(t *testing.T) {
+		input := "User : !@#$ invalid syntax\nValidB : +name string\n"
 
-		p := NewParser(dialect.NewGoDialect())
-		diag, err := p.Parse(input)
+		p := Parser{
+			stream:  stream.NewTokenStream(input),
+			Dialect: dialect.NewGoDialect(),
+			ast:     &ast.Diagram{},
+		}
+		tok := p.stream.Emit()
+		got, err := p.parseInlineMember(tok)
+		require.NoError(t, err)
+		require.NotNil(t, got)
 
-		require.Error(t, err, "expected Parse to return error when diagram contains diagnostics")
-		require.NotNil(t, diag)
-		require.True(t, diag.HasErrors())
-		require.Len(t, diag.Diagnostics, 1)
-
-		// Statements: startuml, ValidA, User (partial InlineMember), ValidB, enduml
-		require.Len(t, diag.Statements, 5)
-
-		imA, ok := diag.Statements[1].(*ast.InlineMember)
-		require.True(t, ok)
-		require.Equal(t, "ValidA", imA.Target.EntityName())
-
-		imUser, ok := diag.Statements[2].(*ast.InlineMember)
+		imUser, ok := got.(*ast.InlineMember)
 		require.True(t, ok, "malformed inline member should be preserved as *ast.InlineMember")
 		require.Equal(t, "User", imUser.Target.EntityName())
+		testutil.SemanticEqual(t, identRef("User"), imUser.Target)
 		require.Nil(t, imUser.Member)
+		require.True(t, p.ast.HasErrors(), "expected parser to record diagnostics on bad syntax")
+		require.Len(t, p.ast.Diagnostics, 1)
 
-		imB, ok := diag.Statements[3].(*ast.InlineMember)
+		// The stream should now be positioned at the newline separating statements.
+		require.Equal(t, tokenizer.NEWLINE, p.stream.PeekTokenAt(0).Type, "expected next token to be NEWLINE after recovery")
+
+		// Consume newline and verify the subsequent statement parses cleanly
+		p.stream.Emit()
+		nextTok := p.stream.Emit()
+		nextGot, err := p.parseInlineMember(nextTok)
+		require.NoError(t, err)
+		require.NotNil(t, nextGot)
+
+		imB, ok := nextGot.(*ast.InlineMember)
 		require.True(t, ok)
 		require.Equal(t, "ValidB", imB.Target.EntityName())
-
-		endBound, ok := diag.Statements[4].(*ast.DiagramBound)
-		require.True(t, ok)
-		require.False(t, endBound.IsStart)
+		require.NotNil(t, imB.Member)
 	})
 
 	t.Run("container level recovers past malformed inline member in body", func(t *testing.T) {
-		input := `@startuml
-package mypkg {
+		input := `package mypkg {
   First : +a int
   User : !@#$ invalid
   Second : +b string
-}
-@enduml`
+}`
 
-		p := NewParser(dialect.NewGoDialect())
-		diag, err := p.Parse(input)
+		p := Parser{
+			stream:  stream.NewTokenStream(input),
+			Dialect: dialect.NewGoDialect(),
+			ast:     &ast.Diagram{},
+		}
+		tok := p.stream.Emit()
+		cont := p.parseContainer(tok)
 
-		require.Error(t, err)
-		require.NotNil(t, diag)
-		require.True(t, diag.HasErrors())
-		require.Len(t, diag.Diagnostics, 1)
+		require.NotNil(t, cont)
+		require.True(t, p.ast.HasErrors(), "expected parser to record diagnostics on bad syntax in container")
+		require.Len(t, p.ast.Diagnostics, 1)
 
-		require.Len(t, diag.Statements, 3)
-
-		cont, ok := diag.Statements[1].(*ast.Container)
-		require.True(t, ok)
 		require.Len(t, cont.Statements, 3)
 
 		imFirst, ok := cont.Statements[0].(*ast.InlineMember)
@@ -900,55 +1053,69 @@ package mypkg {
 	})
 
 	t.Run("empty inline member at newline records diagnostic and parses subsequent entity", func(t *testing.T) {
-		input := `@startuml
-User :
-class Order
-@enduml`
+		input := "User :\nclass Order\n"
 
-		p := NewParser(dialect.NewGoDialect())
-		diag, err := p.Parse(input)
+		p := Parser{
+			stream:  stream.NewTokenStream(input),
+			Dialect: dialect.NewGoDialect(),
+			ast:     &ast.Diagram{},
+		}
+		tok := p.stream.Emit()
+		got, err := p.parseInlineMember(tok)
+		require.NoError(t, err)
+		require.NotNil(t, got)
 
-		require.Error(t, err)
-		require.NotNil(t, diag)
-		require.True(t, diag.HasErrors())
-		require.Len(t, diag.Diagnostics, 1)
-
-		require.Len(t, diag.Statements, 4)
-
-		imUser, ok := diag.Statements[1].(*ast.InlineMember)
-		require.True(t, ok)
+		imUser, ok := got.(*ast.InlineMember)
+		require.True(t, ok, "malformed inline member should be preserved as *ast.InlineMember")
 		require.Equal(t, "User", imUser.Target.EntityName())
+		testutil.SemanticEqual(t, identRef("User"), imUser.Target)
 		require.Nil(t, imUser.Member)
+		require.True(t, p.ast.HasErrors(), "expected parser to record diagnostics on bad syntax")
+		require.Len(t, p.ast.Diagnostics, 1)
 
-		orderEnt, ok := diag.Statements[2].(*ast.Entity)
-		require.True(t, ok)
-		require.Equal(t, "Order", orderEnt.Identifier.EntityName())
+		// The stream should now be positioned at the newline separating statements.
+		require.Equal(t, tokenizer.NEWLINE, p.stream.PeekTokenAt(0).Type, "expected next token to be NEWLINE after recovery")
+
+		// Consume newline and verify the subsequent statement parses cleanly
+		p.stream.Emit()
+		nextTok := p.stream.Emit()
+		require.Equal(t, keyword.Class, keyword.Classify(nextTok.Literal))
+		nextEnt := p.parseEntity(nextTok)
+		require.NotNil(t, nextEnt)
+		require.Equal(t, "Order", nextEnt.Identifier.EntityName())
 	})
 
 	t.Run("qualified target inline member error recovers to parse subsequent statement", func(t *testing.T) {
-		input := `@startuml
-net.http.Client : !@#$ bad
-class Server
-@enduml`
+		input := "net.http.Client : !@#$ bad\nclass Server\n"
 
-		p := NewParser(dialect.NewGoDialect())
-		diag, err := p.Parse(input)
+		p := Parser{
+			stream:  stream.NewTokenStream(input),
+			Dialect: dialect.NewGoDialect(),
+			ast:     &ast.Diagram{},
+		}
+		tok := p.stream.Emit()
+		got, err := p.parseInlineMember(tok)
+		require.NoError(t, err)
+		require.NotNil(t, got)
 
-		require.Error(t, err)
-		require.NotNil(t, diag)
-		require.True(t, diag.HasErrors())
-		require.Len(t, diag.Diagnostics, 1)
-
-		require.Len(t, diag.Statements, 4)
-
-		imClient, ok := diag.Statements[1].(*ast.InlineMember)
-		require.True(t, ok)
+		imClient, ok := got.(*ast.InlineMember)
+		require.True(t, ok, "malformed inline member should be preserved as *ast.InlineMember")
 		require.Equal(t, "Client", imClient.Target.EntityName())
+		testutil.SemanticEqual(t, identRef("Client", "net", "http"), imClient.Target)
 		require.Nil(t, imClient.Member)
+		require.True(t, p.ast.HasErrors(), "expected parser to record diagnostics on bad syntax")
+		require.Len(t, p.ast.Diagnostics, 1)
 
-		serverEnt, ok := diag.Statements[2].(*ast.Entity)
-		require.True(t, ok)
-		require.Equal(t, "Server", serverEnt.Identifier.EntityName())
+		// The stream should now be positioned at the newline separating statements.
+		require.Equal(t, tokenizer.NEWLINE, p.stream.PeekTokenAt(0).Type, "expected next token to be NEWLINE after recovery")
+
+		// Consume newline and verify the subsequent statement parses cleanly
+		p.stream.Emit()
+		nextTok := p.stream.Emit()
+		require.Equal(t, keyword.Class, keyword.Classify(nextTok.Literal))
+		nextEnt := p.parseEntity(nextTok)
+		require.NotNil(t, nextEnt)
+		require.Equal(t, "Server", nextEnt.Identifier.EntityName())
 	})
 }
 

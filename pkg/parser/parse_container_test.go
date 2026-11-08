@@ -342,6 +342,7 @@ func TestParseContainer_Errors(t *testing.T) {
 		kwType      keyword.KeywordKind
 		bs          expectedBlockState
 		errContains string
+		want        *ast.Container
 	}{
 		{
 			name:        "package incomplete alias",
@@ -349,6 +350,9 @@ func TestParseContainer_Errors(t *testing.T) {
 			kwType:      keyword.Package,
 			bs:          expectNoBlock,
 			errContains: "Expected identifier or string for container alias",
+			want: &ast.Container{
+				Kind: ast.ContainerPackage,
+			},
 		},
 		{
 			name:        "package unclosed stereotype",
@@ -356,6 +360,10 @@ func TestParseContainer_Errors(t *testing.T) {
 			kwType:      keyword.Package,
 			bs:          expectNoBlock,
 			errContains: "unexpected EOF",
+			want: &ast.Container{
+				Identifier: identRef("mypkg"),
+				Kind:       ast.ContainerPackage,
+			},
 		},
 		{
 			name:        "package unclosed body",
@@ -363,6 +371,16 @@ func TestParseContainer_Errors(t *testing.T) {
 			kwType:      keyword.Package,
 			bs:          expectBlockUnclosed,
 			errContains: "unclosed package: expected }",
+			want: &ast.Container{
+				Identifier: identRef("mypkg"),
+				Kind:       ast.ContainerPackage,
+				Statements: []ast.Statement{
+					&ast.Entity{
+						Identifier: identRef("A"),
+						Kind:       ast.EntityClass,
+					},
+				},
+			},
 		},
 	}
 
@@ -391,211 +409,316 @@ func TestParseContainer_Errors(t *testing.T) {
 			require.True(t, p.ast.HasErrors(), "expected parser to record diagnostics on bad syntax")
 			require.NotEmpty(t, p.ast.Diagnostics)
 			require.Contains(t, p.ast.Diagnostics[0].Message, tc.errContains)
+			testutil.SemanticEqual(t, tc.want, got)
 		})
 	}
 }
 
 func TestParseContainer_Recovery(t *testing.T) {
+	innerClassStmt := &ast.Entity{
+		Identifier: identRef("InnerClass"),
+		Kind:       ast.EntityClass,
+	}
+
+	badTok := tokenizer.Token{
+		Type:    tokenizer.AT,
+		Literal: "@",
+		Span: tokenizer.SourceSpan{
+			Start: tokenizer.Pos{Line: 1, Col: 3},
+			End:   tokenizer.Pos{Line: 1, Col: 4},
+		},
+	}
+	unexpectedErr := NewParserError(badTok, "Unexpected token")
+	unexpectedStmt := &ast.BadStatement{
+		Diagnostic: &ast.Diagnostic{
+			ID:       0,
+			Severity: ast.SeverityError,
+			Message:  unexpectedErr.Error(),
+			Err:      unexpectedErr,
+		},
+		Tokens: []tokenizer.Token{
+			{Type: tokenizer.AT, Literal: "@"},
+			{Type: tokenizer.IDENTIFIER, Literal: "invalid"},
+		},
+	}
+
 	tests := []struct {
-		name           string
-		input          string
-		kwType         keyword.KeywordKind
-		bs             expectedBlockState
-		wantStatements int
+		name   string
+		input  string
+		kwType keyword.KeywordKind
+		bs     expectedBlockState
+		want   *ast.Container
 	}{
 		// 1. Invalid identifier
 		{
-			name:           "restore to opening brace on bad name token with block",
-			input:          "package 123 {\n  class InnerClass\n}\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectBlockClosed,
-			wantStatements: 1,
+			name:   "restore to opening brace on bad name token with block",
+			input:  "package 123 {\n  class InnerClass\n}\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectBlockClosed,
+			want: &ast.Container{
+				Kind:       ast.ContainerPackage,
+				Statements: []ast.Statement{innerClassStmt},
+			},
 		},
 		{
-			name:           "restore to newline on bad name token without block",
-			input:          "package 123\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectNoBlock,
-			wantStatements: 0,
+			name:   "restore to newline on bad name token without block",
+			input:  "package 123\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectNoBlock,
+			want: &ast.Container{
+				Kind: ast.ContainerPackage,
+			},
 		},
 		{
-			name:           "restore to newline on bad name token with extra junk without block",
-			input:          "package 123 extra junk\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectNoBlock,
-			wantStatements: 0,
+			name:   "restore to newline on bad name token with extra junk without block",
+			input:  "package 123 extra junk\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectNoBlock,
+			want: &ast.Container{
+				Kind: ast.ContainerPackage,
+			},
 		},
 
 		// 2. Invalid alias
 		{
-			name:           "restore to opening brace on invalid alias with block",
-			input:          "package mypkg as 123 {\n  class InnerClass\n}\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectBlockClosed,
-			wantStatements: 1,
+			name:   "restore to opening brace on invalid alias with block",
+			input:  "package mypkg as 123 {\n  class InnerClass\n}\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectBlockClosed,
+			want: &ast.Container{
+				Kind:       ast.ContainerPackage,
+				Statements: []ast.Statement{innerClassStmt},
+			},
 		},
 		{
-			name:           "restore to opening brace on invalid alias with extra tokens before block",
-			input:          "package mypkg as 123 extra junk tokens {\n  class InnerClass\n}\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectBlockClosed,
-			wantStatements: 1,
+			name:   "restore to opening brace on invalid alias with extra tokens before block",
+			input:  "package mypkg as 123 extra junk tokens {\n  class InnerClass\n}\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectBlockClosed,
+			want: &ast.Container{
+				Kind:       ast.ContainerPackage,
+				Statements: []ast.Statement{innerClassStmt},
+			},
 		},
 		{
-			name:           "restore to newline on invalid alias without block",
-			input:          "package mypkg as 123\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectNoBlock,
-			wantStatements: 0,
+			name:   "restore to newline on invalid alias without block",
+			input:  "package mypkg as 123\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectNoBlock,
+			want: &ast.Container{
+				Kind: ast.ContainerPackage,
+			},
 		},
 		{
-			name:           "restore to newline on invalid alias with extra tokens without block",
-			input:          "package mypkg as 123 extra junk tokens\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectNoBlock,
-			wantStatements: 0,
+			name:   "restore to newline on invalid alias with extra tokens without block",
+			input:  "package mypkg as 123 extra junk tokens\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectNoBlock,
+			want: &ast.Container{
+				Kind: ast.ContainerPackage,
+			},
 		},
 
 		// 3. Extra junk before block
 		{
-			name:           "restore to opening brace on extra junk before block",
-			input:          "package mypkg as \"alias\" extra junk {\n  class InnerClass\n}\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectBlockClosed,
-			wantStatements: 1,
+			name:   "restore to opening brace on extra junk before block",
+			input:  "package mypkg as \"alias\" extra junk {\n  class InnerClass\n}\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectBlockClosed,
+			want: &ast.Container{
+				Identifier: identRef("mypkg"),
+				Alias:      tokString("alias"),
+				Kind:       ast.ContainerPackage,
+				Statements: []ast.Statement{innerClassStmt},
+			},
 		},
 		{
-			name:           "restore to newline on extra junk without block",
-			input:          "package mypkg as \"alias\" extra junk\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectNoBlock,
-			wantStatements: 0,
+			name:   "restore to newline on extra junk without block",
+			input:  "package mypkg as \"alias\" extra junk\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectNoBlock,
+			want: &ast.Container{
+				Identifier: identRef("mypkg"),
+				Alias:      tokString("alias"),
+				Kind:       ast.ContainerPackage,
+			},
 		},
 
 		// 4. Unexpected member in target ref
 		{
-			name:           "restore to opening brace on unexpected member in target ref with block",
-			input:          "package Foo.Bar() {\n  class InnerClass\n}\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectBlockClosed,
-			wantStatements: 1,
+			name:   "restore to opening brace on unexpected member in target ref with block",
+			input:  "package Foo.Bar() {\n  class InnerClass\n}\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectBlockClosed,
+			want: &ast.Container{
+				Kind:       ast.ContainerPackage,
+				Statements: []ast.Statement{innerClassStmt},
+			},
 		},
 		{
-			name:           "restore to newline on unexpected member in target ref without block",
-			input:          "package Foo.Bar() extra junk\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectNoBlock,
-			wantStatements: 0,
+			name:   "restore to newline on unexpected member in target ref without block",
+			input:  "package Foo.Bar() extra junk\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectNoBlock,
+			want: &ast.Container{
+				Kind: ast.ContainerPackage,
+			},
 		},
 
 		// 5. Unclosed stereotype
 		{
-			name:           "restore to opening brace on unclosed stereotype with block",
-			input:          "package mypkg <<unclosed {\n  class InnerClass\n}\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectBlockClosed,
-			wantStatements: 1,
+			name:   "restore to opening brace on unclosed stereotype with block",
+			input:  "package mypkg <<unclosed {\n  class InnerClass\n}\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectBlockClosed,
+			want: &ast.Container{
+				Identifier: identRef("mypkg"),
+				Kind:       ast.ContainerPackage,
+				Statements: []ast.Statement{innerClassStmt},
+			},
 		},
 		{
-			name:           "restore to newline on unclosed stereotype without block",
-			input:          "package mypkg <<unclosed stereotype\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectNoBlock,
-			wantStatements: 0,
+			name:   "restore to newline on unclosed stereotype without block",
+			input:  "package mypkg <<unclosed stereotype\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectNoBlock,
+			want: &ast.Container{
+				Identifier: identRef("mypkg"),
+				Kind:       ast.ContainerPackage,
+			},
 		},
 
 		// 6. Malformed tags
 		{
-			name:           "restore to opening brace on missing tag identifier with block",
-			input:          "package mypkg $ {\n  class InnerClass\n}\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectBlockClosed,
-			wantStatements: 1,
+			name:   "restore to opening brace on missing tag identifier with block",
+			input:  "package mypkg $ {\n  class InnerClass\n}\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectBlockClosed,
+			want: &ast.Container{
+				Identifier: identRef("mypkg"),
+				Kind:       ast.ContainerPackage,
+				Statements: []ast.Statement{innerClassStmt},
+			},
 		},
 		{
-			name:           "restore to newline on missing tag identifier without block",
-			input:          "package mypkg $\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectNoBlock,
-			wantStatements: 0,
+			name:   "restore to newline on missing tag identifier without block",
+			input:  "package mypkg $\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectNoBlock,
+			want: &ast.Container{
+				Identifier: identRef("mypkg"),
+				Kind:       ast.ContainerPackage,
+			},
 		},
 		{
-			name:           "restore to opening brace on invalid tag token with block",
-			input:          "package mypkg $123 {\n  class InnerClass\n}\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectBlockClosed,
-			wantStatements: 1,
+			name:   "restore to opening brace on invalid tag token with block",
+			input:  "package mypkg $123 {\n  class InnerClass\n}\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectBlockClosed,
+			want: &ast.Container{
+				Identifier: identRef("mypkg"),
+				Kind:       ast.ContainerPackage,
+				Statements: []ast.Statement{innerClassStmt},
+			},
 		},
 		{
-			name:           "restore to newline on invalid tag token without block",
-			input:          "package mypkg $123\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectNoBlock,
-			wantStatements: 0,
+			name:   "restore to newline on invalid tag token without block",
+			input:  "package mypkg $123\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectNoBlock,
+			want: &ast.Container{
+				Identifier: identRef("mypkg"),
+				Kind:       ast.ContainerPackage,
+			},
 		},
 
 		// 7. Bad alias with tags and stereotype
 		{
-			name:           "restore to opening brace on bad alias with tags and stereotype",
-			input:          "package mypkg as 123 $tag <<stereo>> {\n  class InnerClass\n}\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectBlockClosed,
-			wantStatements: 1,
+			name:   "restore to opening brace on bad alias with tags and stereotype",
+			input:  "package mypkg as 123 $tag <<stereo>> {\n  class InnerClass\n}\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectBlockClosed,
+			want: &ast.Container{
+				Kind:       ast.ContainerPackage,
+				Statements: []ast.Statement{innerClassStmt},
+			},
 		},
 		{
-			name:           "restore to newline on bad alias with tags and stereotype",
-			input:          "package mypkg as 123 $tag <<stereo>>\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectNoBlock,
-			wantStatements: 0,
+			name:   "restore to newline on bad alias with tags and stereotype",
+			input:  "package mypkg as 123 $tag <<stereo>>\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectNoBlock,
+			want: &ast.Container{
+				Kind: ast.ContainerPackage,
+			},
 		},
 
 		// 8. Unclosed block
 		{
-			name:           "restore to opening brace on bad syntax with unclosed block",
-			input:          "package mypkg as 123 {\n  class InnerClass\n",
-			kwType:         keyword.Package,
-			bs:             expectBlockUnclosed,
-			wantStatements: 1,
+			name:   "restore to opening brace on bad syntax with unclosed block",
+			input:  "package mypkg as 123 {\n  class InnerClass\n",
+			kwType: keyword.Package,
+			bs:     expectBlockUnclosed,
+			want: &ast.Container{
+				Kind:       ast.ContainerPackage,
+				Statements: []ast.Statement{innerClassStmt},
+			},
 		},
 		{
-			name:           "restore to opening brace on unclosed container block",
-			input:          "package mypkg {\n  class InnerClass\n",
-			kwType:         keyword.Package,
-			bs:             expectBlockUnclosed,
-			wantStatements: 1,
+			name:   "restore to opening brace on unclosed container block",
+			input:  "package mypkg {\n  class InnerClass\n",
+			kwType: keyword.Package,
+			bs:     expectBlockUnclosed,
+			want: &ast.Container{
+				Identifier: identRef("mypkg"),
+				Kind:       ast.ContainerPackage,
+				Statements: []ast.Statement{innerClassStmt},
+			},
 		},
 
 		// 9. Other container keywords
 		{
-			name:           "restore to opening brace on bad name token for node with block",
-			input:          "node 123 {\n  class InnerClass\n}\nclass NextClass",
-			kwType:         keyword.Node,
-			bs:             expectBlockClosed,
-			wantStatements: 1,
+			name:   "restore to opening brace on bad name token for node with block",
+			input:  "node 123 {\n  class InnerClass\n}\nclass NextClass",
+			kwType: keyword.Node,
+			bs:     expectBlockClosed,
+			want: &ast.Container{
+				Kind:       ast.ContainerNode,
+				Statements: []ast.Statement{innerClassStmt},
+			},
 		},
 		{
-			name:           "restore to newline on invalid alias for folder without block",
-			input:          "folder myfolder as 123\nclass NextClass",
-			kwType:         keyword.Folder,
-			bs:             expectNoBlock,
-			wantStatements: 0,
+			name:   "restore to newline on invalid alias for folder without block",
+			input:  "folder myfolder as 123\nclass NextClass",
+			kwType: keyword.Folder,
+			bs:     expectNoBlock,
+			want: &ast.Container{
+				Kind: ast.ContainerFolder,
+			},
 		},
 		{
-			name:           "restore to opening brace on extra junk before block for database",
-			input:          "database mydb extra junk {\n  class InnerClass\n}\nclass NextClass",
-			kwType:         keyword.Database,
-			bs:             expectBlockClosed,
-			wantStatements: 1,
+			name:   "restore to opening brace on extra junk before block for database",
+			input:  "database mydb extra junk {\n  class InnerClass\n}\nclass NextClass",
+			kwType: keyword.Database,
+			bs:     expectBlockClosed,
+			want: &ast.Container{
+				Identifier: identRef("mydb"),
+				Kind:       ast.ContainerDatabase,
+				Statements: []ast.Statement{innerClassStmt},
+			},
 		},
 
 		// 10. Unexpected token in body
 		{
-			name:           "package unexpected token in body with block",
-			input:          "package mypkg {\n  @invalid\n}\nclass NextClass",
-			kwType:         keyword.Package,
-			bs:             expectBlockClosed,
-			wantStatements: 1,
+			name:   "package unexpected token in body with block",
+			input:  "package mypkg {\n  @invalid\n}\nclass NextClass",
+			kwType: keyword.Package,
+			bs:     expectBlockClosed,
+			want: &ast.Container{
+				Identifier: identRef("mypkg"),
+				Kind:       ast.ContainerPackage,
+				Statements: []ast.Statement{unexpectedStmt},
+			},
 		},
 	}
 
@@ -620,14 +743,18 @@ func TestParseContainer_Recovery(t *testing.T) {
 			switch tc.bs {
 			case expectNoBlock:
 				assertBlockBodyless(t, got)
-				require.Empty(t, got.Statements)
 			case expectBlockClosed:
 				assertBlockClosed(t, got)
-				require.Len(t, got.Statements, tc.wantStatements)
 			case expectBlockUnclosed:
 				assertBlockUnclosed(t, got)
-				require.Len(t, got.Statements, tc.wantStatements)
 			}
+
+			for _, stmt := range got.Statements {
+				if bad, ok := stmt.(*ast.BadStatement); ok && bad.Diagnostic != nil {
+					bad.Diagnostic.Node = nil
+				}
+			}
+			testutil.SemanticEqual(t, tc.want, got)
 
 			// 4. Verify stream position after recovery
 			if tc.bs == expectBlockUnclosed {

@@ -430,16 +430,6 @@ The formatter must be capable of printing diagrams in intermediate states withou
 
 ## 6. Phased Implementation Roadmap
 
-```mermaid
-flowchart TD
-    P1["Phase 1: AST Structural Contracts & Sentinel Errors"] --> P2["Phase 2: Relationship & Arrow Resilience"]
-    P2 --> P3["Phase 3: Delimiter Pos Tracking & Body Recovery"]
-    P3 --> P4["Phase 4: Dialect Boundary Hardening"]
-    P4 --> P5a["Phase 5a: Resolver Resilience & Symbol Hardening"]
-    P5a --> P5b["Phase 5b: Formatter Resilience & Source Fidelity"]
-    P5b --> P6["Phase 6: Typing Simulation Test Suite"]
-```
-
 ### Phase 1: AST Structural Contracts & Sentinel Errors
 - [x] Add `ArrowSpan tokenizer.SourceSpan` and `IsIncomplete() bool` method to [`ast.Relationship`](pkg/parser/ast/class_relation.go).
 - [x] Add delimiter positions `LBrace` and `RBrace` (`tokenizer.Pos`) to [`ast.Entity`](pkg/parser/ast/class_nodes.go), [`ast.Container`](pkg/parser/ast/class_nodes.go), [`ast.SkinparamBlock`](pkg/parser/ast/styles.go), and [`ast.StyleBlock`](pkg/parser/ast/styles.go).
@@ -467,7 +457,7 @@ flowchart TD
 - [x] Restrict `BadMember` strictly to lines starting with unidentifiable tokens.
 
 ### Phase 5a: Resolver Resilience & Symbol Hardening
-- [ ] Refactor `resolveStatements` into dedicated per-type resolver functions (`resolveEntity`, `resolveInlineMember`, `resolveContainer`, `resolveNote`, `resolveRelationship`).
+- [x] Refactor `resolveStatements` into dedicated per-type resolver functions (`resolveEntity`, `resolveInlineMember`, `resolveContainer`, `resolveNote`, `resolveRelationship`).
 - [ ] Drop incomplete/broken AST nodes during symbol resolution:
   - Skip entities with zero identifiers (`Identifier.Name.IsZero()`).
   - Skip inline members with zero targets (`Target.Name.IsZero()`).

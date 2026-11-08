@@ -221,14 +221,18 @@ func TestParseNote_Errors(t *testing.T) {
 	tests := []struct {
 		name      string
 		input     string
-		wantText  string
 		wantDiags []expectedDiag
+		want      *ast.Note
 	}{
 		// 1. Directed note errors
 		{
-			name:     "relative note invalid identifier after direction",
-			input:    "note left invalid : text\n",
-			wantText: "text",
+			name:  "relative note invalid identifier after direction",
+			input: "note left invalid : text\n",
+			want: &ast.Note{
+				Kind:      ast.NoteTargeted,
+				Direction: ast.DirectionLeft,
+				Text:      "text",
+			},
 			wantDiags: []expectedDiag{
 				{
 					Severity: ast.SeverityError,
@@ -237,9 +241,13 @@ func TestParseNote_Errors(t *testing.T) {
 			},
 		},
 		{
-			name:     "relative note expected identifier for target",
-			input:    "note left of : text\n",
-			wantText: "text",
+			name:  "relative note expected identifier for target",
+			input: "note left of : text\n",
+			want: &ast.Note{
+				Kind:      ast.NoteTargeted,
+				Direction: ast.DirectionLeft,
+				Text:      "text",
+			},
 			wantDiags: []expectedDiag{
 				{
 					Severity: ast.SeverityError,
@@ -248,9 +256,13 @@ func TestParseNote_Errors(t *testing.T) {
 			},
 		},
 		{
-			name:     "relative note unexpected identifier for link target",
-			input:    "note left on MyClass : text\n",
-			wantText: "text",
+			name:  "relative note unexpected identifier for link target",
+			input: "note left on MyClass : text\n",
+			want: &ast.Note{
+				Kind:      ast.NoteTargeted,
+				Direction: ast.DirectionLeft,
+				Text:      "text",
+			},
 			wantDiags: []expectedDiag{
 				{
 					Severity: ast.SeverityError,
@@ -259,9 +271,14 @@ func TestParseNote_Errors(t *testing.T) {
 			},
 		},
 		{
-			name:     "relative note warning on link direction ignored",
-			input:    "note left on link : text\n",
-			wantText: "text",
+			name:  "relative note warning on link direction ignored",
+			input: "note left on link : text\n",
+			want: &ast.Note{
+				Kind:      ast.NoteLink,
+				Direction: ast.DirectionLeft,
+				Target:    identRefPtr("link"),
+				Text:      "text",
+			},
 			wantDiags: []expectedDiag{
 				{
 					Severity: ast.SeverityWarning,
@@ -272,9 +289,12 @@ func TestParseNote_Errors(t *testing.T) {
 
 		// 2. Inline alias note errors
 		{
-			name:     "inline alias note missing as",
-			input:    "note \"some note text\" N1\n",
-			wantText: "some note text",
+			name:  "inline alias note missing as",
+			input: "note \"some note text\" N1\n",
+			want: &ast.Note{
+				Kind: ast.NoteAlias,
+				Text: "some note text",
+			},
 			wantDiags: []expectedDiag{
 				{
 					Severity: ast.SeverityError,
@@ -283,9 +303,12 @@ func TestParseNote_Errors(t *testing.T) {
 			},
 		},
 		{
-			name:     "inline alias note missing identifier",
-			input:    "note \"some note text\" as\n",
-			wantText: "some note text",
+			name:  "inline alias note missing identifier",
+			input: "note \"some note text\" as\n",
+			want: &ast.Note{
+				Kind: ast.NoteAlias,
+				Text: "some note text",
+			},
 			wantDiags: []expectedDiag{
 				{
 					Severity: ast.SeverityError,
@@ -294,9 +317,13 @@ func TestParseNote_Errors(t *testing.T) {
 			},
 		},
 		{
-			name:     "inline alias note unexpected tokens after alias",
-			input:    "note \"some note text\" as N1 extra tokens\n",
-			wantText: "some note text",
+			name:  "inline alias note unexpected tokens after alias",
+			input: "note \"some note text\" as N1 extra tokens\n",
+			want: &ast.Note{
+				Kind:       ast.NoteAlias,
+				Text:       "some note text",
+				Identifier: identRef("N1"),
+			},
 			wantDiags: []expectedDiag{
 				{
 					Severity: ast.SeverityError,
@@ -307,9 +334,12 @@ func TestParseNote_Errors(t *testing.T) {
 
 		// 3. Multiline alias note errors
 		{
-			name:     "multiline alias note missing identifier with closed body",
-			input:    "note as\nsome note text\nend note\n",
-			wantText: "some note text",
+			name:  "multiline alias note missing identifier with closed body",
+			input: "note as\nsome note text\nend note\n",
+			want: &ast.Note{
+				Kind: ast.NoteAlias,
+				Text: "some note text",
+			},
 			wantDiags: []expectedDiag{
 				{
 					Severity: ast.SeverityError,
@@ -320,6 +350,9 @@ func TestParseNote_Errors(t *testing.T) {
 		{
 			name:  "multiline alias note missing identifier and unclosed body",
 			input: "note as\n",
+			want: &ast.Note{
+				Kind: ast.NoteAlias,
+			},
 			wantDiags: []expectedDiag{
 				{
 					Severity: ast.SeverityError,
@@ -332,9 +365,13 @@ func TestParseNote_Errors(t *testing.T) {
 			},
 		},
 		{
-			name:     "multiline alias note with colon (invalid newline) and closed body",
-			input:    "note as N1 : some note text\nbody\nend note\n",
-			wantText: "body",
+			name:  "multiline alias note with colon (invalid newline) and closed body",
+			input: "note as N1 : some note text\nbody\nend note\n",
+			want: &ast.Note{
+				Kind:       ast.NoteAlias,
+				Identifier: identRef("N1"),
+				Text:       "body",
+			},
 			wantDiags: []expectedDiag{
 				{
 					Severity: ast.SeverityError,
@@ -343,9 +380,14 @@ func TestParseNote_Errors(t *testing.T) {
 			},
 		},
 		{
-			name:     "multiline alias note with colon and color (invalid) and closed body",
-			input:    "note as N1 #red : some note text\nbody\nend note\n",
-			wantText: "body",
+			name:  "multiline alias note with colon and color (invalid) and closed body",
+			input: "note as N1 #red : some note text\nbody\nend note\n",
+			want: &ast.Note{
+				Kind:       ast.NoteAlias,
+				Identifier: identRef("N1"),
+				Color:      "#red",
+				Text:       "body",
+			},
 			wantDiags: []expectedDiag{
 				{
 					Severity: ast.SeverityError,
@@ -356,9 +398,11 @@ func TestParseNote_Errors(t *testing.T) {
 
 		// 4. Link note errors
 		{
-			name:     "unexpected identifier after note (link note invalid position)",
-			input:    "note of link : text\n",
-			wantText: "text",
+			name:  "unexpected identifier after note (link note invalid position)",
+			input: "note of link : text\n",
+			want: &ast.Note{
+				Text: "text",
+			},
 			wantDiags: []expectedDiag{
 				{
 					Severity: ast.SeverityError,
@@ -367,9 +411,11 @@ func TestParseNote_Errors(t *testing.T) {
 			},
 		},
 		{
-			name:     "link note expected link after note on with colon",
-			input:    "note on invalid : text\n",
-			wantText: "text",
+			name:  "link note expected link after note on with colon",
+			input: "note on invalid : text\n",
+			want: &ast.Note{
+				Text: "text",
+			},
 			wantDiags: []expectedDiag{
 				{
 					Severity: ast.SeverityError,
@@ -378,9 +424,11 @@ func TestParseNote_Errors(t *testing.T) {
 			},
 		},
 		{
-			name:     "link note expected link after note on with block",
-			input:    "note on invalid\ntext\nend note\n",
-			wantText: "text",
+			name:  "link note expected link after note on with block",
+			input: "note on invalid\ntext\nend note\n",
+			want: &ast.Note{
+				Text: "text",
+			},
 			wantDiags: []expectedDiag{
 				{
 					Severity: ast.SeverityError,
@@ -391,6 +439,7 @@ func TestParseNote_Errors(t *testing.T) {
 		{
 			name:  "link note missing target and unclosed body",
 			input: "note on\n",
+			want:  &ast.Note{},
 			wantDiags: []expectedDiag{
 				{
 					Severity: ast.SeverityError,
@@ -407,6 +456,7 @@ func TestParseNote_Errors(t *testing.T) {
 		{
 			name:  "parseNote unexpected starting keyword",
 			input: "note class : text\n",
+			want:  &ast.Note{},
 			wantDiags: []expectedDiag{
 				{
 					Severity: ast.SeverityError,
@@ -417,6 +467,7 @@ func TestParseNote_Errors(t *testing.T) {
 		{
 			name:  "parseNote unexpected starting token type",
 			input: "note 123 : text\n",
+			want:  &ast.Note{},
 			wantDiags: []expectedDiag{
 				{
 					Severity: ast.SeverityError,
@@ -427,6 +478,10 @@ func TestParseNote_Errors(t *testing.T) {
 		{
 			name:  "parseNoteBody unexpected body definition token",
 			input: "note left @invalid\n",
+			want: &ast.Note{
+				Kind:      ast.NoteTargeted,
+				Direction: ast.DirectionLeft,
+			},
 			wantDiags: []expectedDiag{
 				{
 					Severity: ast.SeverityError,
@@ -437,6 +492,10 @@ func TestParseNote_Errors(t *testing.T) {
 		{
 			name:  "parseNoteBody unclosed multiline block",
 			input: "note left\nsome unclosed text\n",
+			want: &ast.Note{
+				Kind:      ast.NoteTargeted,
+				Direction: ast.DirectionLeft,
+			},
 			wantDiags: []expectedDiag{
 				{
 					Severity: ast.SeverityError,
@@ -460,115 +519,161 @@ func TestParseNote_Errors(t *testing.T) {
 			require.NotNil(t, got)
 			require.True(t, p.ast.HasErrors(), "expected parser to record diagnostics on bad syntax")
 			assertDiagsEqual(t, tc.wantDiags, p.ast.Diagnostics, got)
-			if tc.wantText != "" {
-				require.Equal(t, tc.wantText, got.Text)
-			}
+			testutil.SemanticEqual(t, tc.want, got)
 		})
 	}
 }
 
 func TestParseNote_Recovery(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    string
-		bs       expectedNoteBodyState
-		wantText string
+		name  string
+		input string
+		bs    expectedNoteBodyState
+		want  *ast.Note
 	}{
 		{
-			name:     "restore on invalid identifier after direction with colon",
-			input:    "note left invalid : text\nclass NextClass",
-			bs:       expectSingleLine,
-			wantText: "text",
+			name:  "restore on invalid identifier after direction with colon",
+			input: "note left invalid : text\nclass NextClass",
+			bs:    expectSingleLine,
+			want: &ast.Note{
+				Kind:      ast.NoteTargeted,
+				Direction: ast.DirectionLeft,
+				Text:      "text",
+			},
 		},
 		{
-			name:     "restore on invalid identifier after direction with multiline block",
-			input:    "note left invalid\nsome multiline text\nend note\nclass NextClass",
-			bs:       expectMultilineClosed,
-			wantText: "some multiline text",
+			name:  "restore on invalid identifier after direction with multiline block",
+			input: "note left invalid\nsome multiline text\nend note\nclass NextClass",
+			bs:    expectMultilineClosed,
+			want: &ast.Note{
+				Kind:      ast.NoteTargeted,
+				Direction: ast.DirectionLeft,
+				Text:      "some multiline text",
+			},
 		},
 		{
-			name:     "restore on missing target identifier after of with colon",
-			input:    "note left of : text\nclass NextClass",
-			bs:       expectSingleLine,
-			wantText: "text",
+			name:  "restore on missing target identifier after of with colon",
+			input: "note left of : text\nclass NextClass",
+			bs:    expectSingleLine,
+			want: &ast.Note{
+				Kind:      ast.NoteTargeted,
+				Direction: ast.DirectionLeft,
+				Text:      "text",
+			},
 		},
 		{
-			name:     "restore on missing target identifier after of with multiline block",
-			input:    "note left of\nsome multiline text\nend note\nclass NextClass",
-			bs:       expectMultilineClosed,
-			wantText: "some multiline text",
+			name:  "restore on missing target identifier after of with multiline block",
+			input: "note left of\nsome multiline text\nend note\nclass NextClass",
+			bs:    expectMultilineClosed,
+			want: &ast.Note{
+				Kind:      ast.NoteTargeted,
+				Direction: ast.DirectionLeft,
+				Text:      "some multiline text",
+			},
 		},
 		{
-			name:     "restore on unexpected identifier for link target with colon",
-			input:    "note left on MyClass : text\nclass NextClass",
-			bs:       expectSingleLine,
-			wantText: "text",
+			name:  "restore on unexpected identifier for link target with colon",
+			input: "note left on MyClass : text\nclass NextClass",
+			bs:    expectSingleLine,
+			want: &ast.Note{
+				Kind:      ast.NoteTargeted,
+				Direction: ast.DirectionLeft,
+				Text:      "text",
+			},
 		},
 		{
-			name:     "restore on unexpected identifier for link target with multiline block",
-			input:    "note left on MyClass\nsome multiline text\nend note\nclass NextClass",
-			bs:       expectMultilineClosed,
-			wantText: "some multiline text",
+			name:  "restore on unexpected identifier for link target with multiline block",
+			input: "note left on MyClass\nsome multiline text\nend note\nclass NextClass",
+			bs:    expectMultilineClosed,
+			want: &ast.Note{
+				Kind:      ast.NoteTargeted,
+				Direction: ast.DirectionLeft,
+				Text:      "some multiline text",
+			},
 		},
 		{
-			name:     "restore on invalid alias for inline note",
-			input:    "note \"some text\" as 123\nclass NextClass",
-			bs:       expectSingleLine,
-			wantText: "some text",
+			name:  "restore on invalid alias for inline note",
+			input: "note \"some text\" as 123\nclass NextClass",
+			bs:    expectSingleLine,
+			want: &ast.Note{
+				Kind: ast.NoteAlias,
+				Text: "some text",
+			},
 		},
 		{
-			name:     "restore on missing as keyword for inline note",
-			input:    "note \"some text\" N1\nclass NextClass",
-			bs:       expectSingleLine,
-			wantText: "some text",
+			name:  "restore on missing as keyword for inline note",
+			input: "note \"some text\" N1\nclass NextClass",
+			bs:    expectSingleLine,
+			want: &ast.Note{
+				Kind: ast.NoteAlias,
+				Text: "some text",
+			},
 		},
 		{
-			name:     "restore on extra tokens after inline alias note",
-			input:    "note \"some text\" as N1 extra tokens\nclass NextClass",
-			bs:       expectSingleLine,
-			wantText: "some text",
+			name:  "restore on extra tokens after inline alias note",
+			input: "note \"some text\" as N1 extra tokens\nclass NextClass",
+			bs:    expectSingleLine,
+			want: &ast.Note{
+				Kind:       ast.NoteAlias,
+				Text:       "some text",
+				Identifier: identRef("N1"),
+			},
 		},
 		{
-			name:     "restore on missing identifier for multiline alias note with block",
-			input:    "note as 123\nsome note text\nend note\nclass NextClass",
-			bs:       expectMultilineClosed,
-			wantText: "some note text",
+			name:  "restore on missing identifier for multiline alias note with block",
+			input: "note as 123\nsome note text\nend note\nclass NextClass",
+			bs:    expectMultilineClosed,
+			want: &ast.Note{
+				Kind: ast.NoteAlias,
+				Text: "some note text",
+			},
 		},
 		{
-			name:     "restore on unexpected tokens before newline for multiline alias note",
-			input:    "note as N1 : invalid\nsome note text\nend note\nclass NextClass",
-			bs:       expectMultilineClosed,
-			wantText: "some note text",
+			name:  "restore on unexpected tokens before newline for multiline alias note",
+			input: "note as N1 : invalid\nsome note text\nend note\nclass NextClass",
+			bs:    expectMultilineClosed,
+			want: &ast.Note{
+				Kind:       ast.NoteAlias,
+				Text:       "some note text",
+				Identifier: identRef("N1"),
+			},
 		},
 		{
-			name:     "restore on expected link after note on with colon",
-			input:    "note on invalid : text\nclass NextClass",
-			bs:       expectSingleLine,
-			wantText: "text",
+			name:  "restore on expected link after note on with colon",
+			input: "note on invalid : text\nclass NextClass",
+			bs:    expectSingleLine,
+			want: &ast.Note{
+				Text: "text",
+			},
 		},
 		{
-			name:     "restore on expected link after note on with multiline block",
-			input:    "note on invalid\nsome multiline text\nend note\nclass NextClass",
-			bs:       expectMultilineClosed,
-			wantText: "some multiline text",
+			name:  "restore on expected link after note on with multiline block",
+			input: "note on invalid\nsome multiline text\nend note\nclass NextClass",
+			bs:    expectMultilineClosed,
+			want: &ast.Note{
+				Text: "some multiline text",
+			},
 		},
 		{
-			name:     "restore on unexpected token in note definition",
-			input:    "note 123 : text\nclass NextClass",
-			bs:       expectSingleLine,
-			wantText: "",
+			name:  "restore on unexpected token in note definition",
+			input: "note 123 : text\nclass NextClass",
+			bs:    expectSingleLine,
+			want:  &ast.Note{},
 		},
 		{
-			name:     "restore on unexpected identifier after note without body",
-			input:    "note class\nclass NextClass",
-			bs:       expectSingleLine,
-			wantText: "",
+			name:  "restore on unexpected identifier after note without body",
+			input: "note class\nclass NextClass",
+			bs:    expectSingleLine,
+			want:  &ast.Note{},
 		},
 		{
-			name:     "restore on unclosed multiline note block",
-			input:    "note left\nsome unclosed text\n",
-			bs:       expectMultilineUnclosed,
-			wantText: "",
+			name:  "restore on unclosed multiline note block",
+			input: "note left\nsome unclosed text\n",
+			bs:    expectMultilineUnclosed,
+			want: &ast.Note{
+				Kind:      ast.NoteTargeted,
+				Direction: ast.DirectionLeft,
+			},
 		},
 	}
 
@@ -586,8 +691,7 @@ func TestParseNote_Recovery(t *testing.T) {
 			require.NotNil(t, got)
 			require.True(t, p.ast.HasErrors(), "expected parser to record diagnostics on bad syntax")
 
-			// Verify note text was parsed/retained properly
-			require.Equal(t, tc.wantText, got.Text, "expected note text to match after recovery")
+			testutil.SemanticEqual(t, tc.want, got)
 
 			if tc.bs == expectMultilineUnclosed {
 				return

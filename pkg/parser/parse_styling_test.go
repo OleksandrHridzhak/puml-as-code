@@ -4,11 +4,12 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"yur4uwe/pac/internal/testutil"
 	"yur4uwe/pac/pkg/parser/ast"
 	"yur4uwe/pac/pkg/parser/dialect"
-	"yur4uwe/pac/pkg/tokenizer/keyword"
 	"yur4uwe/pac/pkg/stream"
 	"yur4uwe/pac/pkg/tokenizer"
+	"yur4uwe/pac/pkg/tokenizer/keyword"
 )
 
 func newDirectParser(input string) (*Parser, tokenizer.Token) {
@@ -97,6 +98,7 @@ func TestParseStyleBlock_Errors(t *testing.T) {
 		ruleBs         expectedBlockState
 		errContains    string
 		wantStatements int
+		want           *ast.StyleBlock
 	}{
 		{
 			name:           "unterminated style block",
@@ -105,6 +107,19 @@ func TestParseStyleBlock_Errors(t *testing.T) {
 			ruleBs:         expectBlockClosed,
 			errContains:    "unclosed <style>: expected </style>",
 			wantStatements: 1,
+			want: &ast.StyleBlock{
+				Statements: []ast.Statement{
+					&ast.StyleRule{
+						Selectors: []string{"root"},
+						Statements: []ast.Statement{
+							&ast.StyleDeclaration{
+								Property: "FontColor",
+								Value:    "red",
+							},
+						},
+					},
+				},
+			},
 		},
 		{
 			name:           "unterminated rule in style block",
@@ -113,6 +128,19 @@ func TestParseStyleBlock_Errors(t *testing.T) {
 			ruleBs:         expectBlockUnclosed,
 			errContains:    "unclosed style rule: expected }",
 			wantStatements: 1,
+			want: &ast.StyleBlock{
+				Statements: []ast.Statement{
+					&ast.StyleRule{
+						Selectors: []string{"root"},
+						Statements: []ast.Statement{
+							&ast.StyleDeclaration{
+								Property: "FontColor",
+								Value:    "red",
+							},
+						},
+					},
+				},
+			},
 		},
 		{
 			name:           "empty selector list",
@@ -121,6 +149,19 @@ func TestParseStyleBlock_Errors(t *testing.T) {
 			ruleBs:         expectBlockClosed,
 			errContains:    "empty selector in style rule",
 			wantStatements: 1,
+			want: &ast.StyleBlock{
+				Statements: []ast.Statement{
+					&ast.StyleRule{
+						Selectors: []string{"", ""},
+						Statements: []ast.Statement{
+							&ast.StyleDeclaration{
+								Property: "FontColor",
+								Value:    "red",
+							},
+						},
+					},
+				},
+			},
 		},
 		{
 			name:           "missing opening brace after style rule",
@@ -128,6 +169,13 @@ func TestParseStyleBlock_Errors(t *testing.T) {
 			bs:             expectBlockClosed,
 			errContains:    "Expected opening brace after style rule",
 			wantStatements: 1,
+			want: &ast.StyleBlock{
+				Statements: []ast.Statement{
+					&ast.StyleRule{
+						Selectors: []string{"root"},
+					},
+				},
+			},
 		},
 		{
 			name:           "unexpected token in style rule body",
@@ -136,6 +184,19 @@ func TestParseStyleBlock_Errors(t *testing.T) {
 			ruleBs:         expectBlockClosed,
 			errContains:    "Expected style property name or rule selector",
 			wantStatements: 1,
+			want: &ast.StyleBlock{
+				Statements: []ast.Statement{
+					&ast.StyleRule{
+						Selectors: []string{"root"},
+						Statements: []ast.Statement{
+							&ast.StyleDeclaration{
+								Property: "FontColor",
+								Value:    "red",
+							},
+						},
+					},
+				},
+			},
 		},
 		{
 			name:           "missing value after style declaration",
@@ -144,6 +205,13 @@ func TestParseStyleBlock_Errors(t *testing.T) {
 			ruleBs:         expectBlockClosed,
 			errContains:    "expected value after style declaration",
 			wantStatements: 1,
+			want: &ast.StyleBlock{
+				Statements: []ast.Statement{
+					&ast.StyleRule{
+						Selectors: []string{"root"},
+					},
+				},
+			},
 		},
 	}
 
@@ -177,6 +245,8 @@ func TestParseStyleBlock_Errors(t *testing.T) {
 					}
 				}
 			}
+
+			testutil.SemanticEqual(t, tc.want, sb)
 		})
 	}
 }
@@ -187,42 +257,133 @@ func TestParseStyleBlock_Recovery(t *testing.T) {
 		input          string
 		bs             expectedBlockState
 		wantStatements int
+		want           *ast.StyleBlock
 	}{
 		{
 			name:           "restore to next rule on empty selector",
 			input:          "<style>\n, {\nFontColor: red;\n}\nclass {\nBackgroundColor: blue;\n}\n</style>\nclass NextClass",
 			bs:             expectBlockClosed,
 			wantStatements: 2,
+			want: &ast.StyleBlock{
+				Statements: []ast.Statement{
+					&ast.StyleRule{
+						Selectors: []string{"", ""},
+						Statements: []ast.Statement{
+							&ast.StyleDeclaration{
+								Property: "FontColor",
+								Value:    "red",
+							},
+						},
+					},
+					&ast.StyleRule{
+						Selectors: []string{"class"},
+						Statements: []ast.Statement{
+							&ast.StyleDeclaration{
+								Property: "BackgroundColor",
+								Value:    "blue",
+							},
+						},
+					},
+				},
+			},
 		},
 		{
 			name:           "restore to next rule on missing opening brace",
 			input:          "<style>\nroot\nclass {\nBackgroundColor: blue;\n}\n</style>\nclass NextClass",
 			bs:             expectBlockClosed,
 			wantStatements: 2,
+			want: &ast.StyleBlock{
+				Statements: []ast.Statement{
+					&ast.StyleRule{
+						Selectors: []string{"root"},
+					},
+					&ast.StyleRule{
+						Selectors: []string{"class"},
+						Statements: []ast.Statement{
+							&ast.StyleDeclaration{
+								Property: "BackgroundColor",
+								Value:    "blue",
+							},
+						},
+					},
+				},
+			},
 		},
 		{
 			name:           "restore past bad token inside rule body",
 			input:          "<style>\nroot {\n@invalid\nFontColor: red;\n}\n</style>\nclass NextClass",
 			bs:             expectBlockClosed,
 			wantStatements: 1,
+			want: &ast.StyleBlock{
+				Statements: []ast.Statement{
+					&ast.StyleRule{
+						Selectors: []string{"root"},
+						Statements: []ast.Statement{
+							&ast.StyleDeclaration{
+								Property: "FontColor",
+								Value:    "red",
+							},
+						},
+					},
+				},
+			},
 		},
 		{
 			name:           "restore past missing value in declaration",
 			input:          "<style>\nroot {\nFontColor:\nMargin: 10;\n}\n</style>\nclass NextClass",
 			bs:             expectBlockClosed,
 			wantStatements: 1,
+			want: &ast.StyleBlock{
+				Statements: []ast.Statement{
+					&ast.StyleRule{
+						Selectors: []string{"root"},
+						Statements: []ast.Statement{
+							&ast.StyleDeclaration{
+								Property: "Margin",
+								Value:    "10",
+							},
+						},
+					},
+				},
+			},
 		},
 		{
 			name:           "restore on unclosed rule before style block closer",
 			input:          "<style>\nroot {\nFontColor: red;\n</style>\nclass NextClass",
 			bs:             expectBlockClosed,
 			wantStatements: 1,
+			want: &ast.StyleBlock{
+				Statements: []ast.Statement{
+					&ast.StyleRule{
+						Selectors: []string{"root"},
+						Statements: []ast.Statement{
+							&ast.StyleDeclaration{
+								Property: "FontColor",
+								Value:    "red",
+							},
+						},
+					},
+				},
+			},
 		},
 		{
 			name:           "restore to EOF on unclosed style block",
 			input:          "<style>\nroot {\nFontColor: red;\n}\n",
 			bs:             expectBlockUnclosed,
 			wantStatements: 1,
+			want: &ast.StyleBlock{
+				Statements: []ast.Statement{
+					&ast.StyleRule{
+						Selectors: []string{"root"},
+						Statements: []ast.Statement{
+							&ast.StyleDeclaration{
+								Property: "FontColor",
+								Value:    "red",
+							},
+						},
+					},
+				},
+			},
 		},
 	}
 
@@ -243,6 +404,7 @@ func TestParseStyleBlock_Recovery(t *testing.T) {
 			}
 
 			require.Len(t, sb.Statements, tc.wantStatements)
+			testutil.SemanticEqual(t, tc.want, sb)
 
 			if tc.bs == expectBlockUnclosed {
 				require.True(t, p.stream.AssertType(tokenizer.EOF), "expected stream to reach EOF on unclosed block")
