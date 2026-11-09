@@ -52,6 +52,8 @@ type Entity struct {
 	Tags       []string      `json:",omitempty"`
 	Generic    string        `json:",omitempty"`
 	Color      string        `json:",omitempty"`
+	Extends    []TargetRef   `json:",omitempty"`
+	Implements []TargetRef   `json:",omitempty"`
 	LBrace     tokenizer.Pos // Zero if bodyless declaration
 	Members    []Member      `json:",omitempty"`
 	RBrace     tokenizer.Pos // Zero if unclosed before EOF
