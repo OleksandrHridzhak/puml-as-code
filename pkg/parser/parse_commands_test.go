@@ -5,6 +5,7 @@ import (
 
 	"yur4uwe/pac/internal/testutil"
 	"yur4uwe/pac/pkg/parser/ast"
+	"yur4uwe/pac/pkg/parser/dialect"
 	"yur4uwe/pac/pkg/stream"
 
 	"github.com/stretchr/testify/require"
@@ -136,15 +137,30 @@ func TestParseScaleCommand(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := Parser{
 				stream: stream.NewTokenStream(tc.input),
+				ast:    &ast.Diagram{},
 			}
-			p.stream.Emit()
-			got, err := p.parseScale()
+			got := p.parseScale(p.stream.Emit())
 			if tc.expectErr {
-				require.Error(t, err)
+				require.Len(t, p.ast.Diagnostics, 1)
+				require.Same(t, got, p.ast.Diagnostics[0].Node)
 			} else {
-				require.NoError(t, err)
+				require.Empty(t, p.ast.Diagnostics)
 				testutil.SemanticEqual(t, tc.want, got)
 			}
 		})
 	}
+}
+
+func TestScaleRecoversAtNextStatement(t *testing.T) {
+	p := NewParser(dialect.LaxDialect{})
+	diagram, err := p.Parse("@startuml\nscale max 200x\nclass Next\n@enduml\n")
+	require.Error(t, err)
+	require.Len(t, diagram.Diagnostics, 1)
+	require.Len(t, diagram.Statements, 4)
+	scale := diagram.Statements[1].(*ast.ScaleCommand)
+	require.True(t, scale.IsMax)
+	require.Equal(t, "200", scale.Lhs)
+	require.Equal(t, "x", scale.Sep)
+	require.Same(t, scale, diagram.Diagnostics[0].Node)
+	require.Equal(t, "Next", diagram.Statements[2].(*ast.Entity).Identifier.EntityName())
 }
