@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"yur4uwe/pac/pkg/resolver"
 )
 
 func TestFmtStdinCLI(t *testing.T) {
@@ -36,7 +38,7 @@ func TestFmtStdinCLI(t *testing.T) {
 		{name: "check clean", input: formatted, args: []string{"-check", "-"}},
 		{name: "check dirty", input: unformatted, status: 1, diagnostic: "is not formatted", args: []string{"-check", "-"}},
 		{name: "check file error", status: 2, diagnostic: "cannot format file", args: []string{"-check", filepath.Join(t.TempDir(), "missing.puml")}},
-		{name: "size limit", input: strings.Repeat(" ", maxFormatInput), status: 2, diagnostic: "input size is too large", args: []string{"-"}},
+		{name: "size limit", input: strings.Repeat(" ", resolver.MaxFileSize), status: 2, diagnostic: "input size is too large", args: []string{"-"}},
 		{name: "mixed inputs", status: 2, diagnostic: "only input", args: []string{"file.puml", "-"}},
 		{name: "in-place stdin", status: 2, diagnostic: "-w cannot be used with stdin", args: []string{"-w", "-"}},
 		{name: "no implicit stdin", status: 2, diagnostic: "provide a file or -"},

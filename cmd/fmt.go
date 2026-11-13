@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"yur4uwe/pac/pkg/formatter"
+	"yur4uwe/pac/pkg/resolver"
 )
 
 type FmtCommand struct {
@@ -21,8 +22,6 @@ type FmtCommand struct {
 	write      bool
 	stdinPath  string
 }
-
-const maxFormatInput = 10 * 1024 * 1024
 
 var errNeedsFormatting = errors.New("input needs formatting")
 
@@ -192,7 +191,7 @@ func validateAndReadFile(file string, isWrite bool) (string, os.FileInfo, error)
 	if !info.Mode().IsRegular() {
 		return "", nil, fmt.Errorf("%s is not a regular file", file)
 	}
-	if info.Size() >= maxFormatInput {
+	if info.Size() >= resolver.MaxFileSize {
 		return "", nil, errors.New("file size is too large")
 	}
 	if info.Size() == 0 {
@@ -216,11 +215,11 @@ func validateAndReadFile(file string, isWrite bool) (string, os.FileInfo, error)
 }
 
 func readFormatInput(in io.Reader, name string) (string, error) {
-	data, err := io.ReadAll(io.LimitReader(in, maxFormatInput))
+	data, err := io.ReadAll(io.LimitReader(in, resolver.MaxFileSize))
 	if err != nil {
 		return "", err
 	}
-	if len(data) >= maxFormatInput {
+	if len(data) >= resolver.MaxFileSize {
 		return "", errors.New("input size is too large")
 	}
 	if bytes.IndexByte(data, 0) != -1 || !utf8.Valid(data) {
