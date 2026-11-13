@@ -8,9 +8,9 @@ import (
 
 	"yur4uwe/pac/pkg/parser/ast"
 	"yur4uwe/pac/pkg/parser/dialect"
-	"yur4uwe/pac/pkg/tokenizer/keyword"
 	"yur4uwe/pac/pkg/stream"
 	"yur4uwe/pac/pkg/tokenizer"
+	"yur4uwe/pac/pkg/tokenizer/keyword"
 )
 
 func unamb(tok tokenizer.TokenType) tokenizer.Token {
@@ -254,7 +254,7 @@ func (p *Parser) parseDiagramOnlyStatement(tok tokenizer.Token) (ast.Statement, 
 	case keyword.Hide, keyword.Show, keyword.Remove, keyword.Restore:
 		return p.parseVisibilityCommand(tok), nil
 	case keyword.Scale:
-		return p.parseScale()
+		return p.parseScale(tok), nil
 	case keyword.Direction:
 		nextTok := p.stream.PeekTokenAt(0)
 		if nextTok.Literal == "to" {
