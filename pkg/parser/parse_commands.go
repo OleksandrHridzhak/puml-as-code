@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"regexp"
 	"strings"
 
 	"yur4uwe/pac/pkg/parser/ast"
@@ -90,40 +89,107 @@ func (p *Parser) parseDiagDirection(tok tokenizer.Token) *ast.DirectionCommand {
 	return cmd
 }
 
-// Scale operands are unsigned decimal literals. Extract them from the source
-// line instead of relying on the lexer to split every spelling of a box.
-var scaleOperands = regexp.MustCompile(`^([0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:\s*([*x/])\s*([0-9]+(?:\.[0-9]*)?|\.[0-9]+)?)?(?:\s+(width|height)\b)?`)
-
 func (p *Parser) parseScale(start tokenizer.Token) *ast.ScaleCommand {
 	cmd := &ast.ScaleCommand{}
 	_, cmd.IsMax = p.stream.TryConsume(amb(tokenizer.IDENTIFIER, "max"))
-	tokens := p.syncToLineEnd()
+	tokens := extractScaleTokens(p.syncToLineEnd())
 	span := p.Span(p.Mark(start))
-	fail := func(message string) *ast.ScaleCommand {
+	if message := readScaleOperands(cmd, tokens); message != "" {
 		p.ast.RecordError(NewParserError(start, message), span, cmd)
-		return cmd
 	}
-	src := p.stream.SliceInputEnclosingTokens(tokens...)
-	match := scaleOperands.FindStringSubmatch(src)
-	if match == nil {
-		return fail("expected a decimal number after scale")
+	return cmd
+}
+
+// The lexer reads 200x100 as one identifier. Split this form and the
+// one-sided variants (200x and x100) into ordinary operand tokens.
+func extractScaleTokens(tokens []tokenizer.Token) []tokenizer.Token {
+	for i, tok := range tokens {
+		if tok.Type != tokenizer.IDENTIFIER {
+			continue
+		}
+		left, right, ok := strings.Cut(tok.Literal, "x")
+		if !ok || left == "" && right == "" ||
+			left != "" && !isScaleInteger(left) || right != "" && !isScaleInteger(right) {
+			continue
+		}
+		normalized := make([]tokenizer.Token, 0, len(tokens)+2)
+		normalized = append(normalized, tokens[:i]...)
+		if left != "" {
+			normalized = append(normalized, tokenizer.Token{Type: tokenizer.NUMBER, Literal: left, Span: tok.Span})
+		}
+		normalized = append(normalized, tokenizer.Token{Type: tokenizer.IDENTIFIER, Literal: "x", Span: tok.Span})
+		if right != "" {
+			normalized = append(normalized, tokenizer.Token{Type: tokenizer.NUMBER, Literal: right, Span: tok.Span})
+		}
+		return append(normalized, tokens[i+1:]...)
 	}
-	// An adjacent 0x prefix is reserved for hexadecimal numbers, not boxes.
-	if strings.HasPrefix(src, "0x") && len(tokens) > 0 && strings.HasPrefix(tokens[0].Literal, "0x") {
-		return fail("hexadecimal numbers are not supported in scale")
+	return tokens
+}
+
+func isScaleInteger(s string) bool {
+	if s == "" {
+		return false
 	}
-	cmd.Lhs, cmd.Sep, cmd.Rhs, cmd.Unit = match[1], match[2], match[3], match[4]
-	if strings.TrimSpace(src[len(match[0]):]) != "" {
-		return fail("unexpected tokens after scale operands")
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
 	}
-	decimal := strings.Contains(cmd.Lhs, ".")
+	return true
+}
+
+func readScaleNumber(tokens []tokenizer.Token) (string, []tokenizer.Token) {
+	if len(tokens) == 0 {
+		return "", tokens
+	}
+	first := tokens[0]
+	if first.Type == tokenizer.DOT && len(tokens) > 1 {
+		second := tokens[1]
+		if second.Type == tokenizer.NUMBER && isAdjacent(first, second) && isScaleInteger(second.Literal) {
+			return "." + second.Literal, tokens[2:]
+		}
+	}
+	if first.Type != tokenizer.NUMBER {
+		return "", tokens
+	}
+	left, right, decimal := strings.Cut(first.Literal, ".")
+	if !isScaleInteger(left) || decimal && right != "" && !isScaleInteger(right) {
+		return "", tokens
+	}
+	return first.Literal, tokens[1:]
+}
+
+func readScaleOperands(cmd *ast.ScaleCommand, tokens []tokenizer.Token) string {
+	cmd.Lhs, tokens = readScaleNumber(tokens)
+	if cmd.Lhs == "" {
+		return "expected a decimal number after scale"
+	}
+
+	if len(tokens) > 0 {
+		tok := tokens[0]
+		if tok.Type == tokenizer.ASTERISK || tok.Type == tokenizer.SLASH ||
+			tok.Type == tokenizer.IDENTIFIER && tok.Literal == "x" {
+			cmd.Sep = tok.Literal
+			cmd.Rhs, tokens = readScaleNumber(tokens[1:])
+			if !isScaleInteger(cmd.Lhs) || !isScaleInteger(cmd.Rhs) {
+				return "expected decimal integers on both sides of the scale separator"
+			}
+		}
+	}
+	if len(tokens) > 0 && tokens[0].Type == tokenizer.IDENTIFIER {
+		switch tokens[0].Literal {
+		case "width", "height":
+			cmd.Unit = tokens[0].Literal
+			tokens = tokens[1:]
+		}
+	}
 	switch {
-	case cmd.Sep != "" && (cmd.Rhs == "" || decimal || strings.Contains(cmd.Rhs, ".")):
-		return fail("expected decimal integers on both sides of the scale separator")
+	case len(tokens) > 0:
+		return "unexpected tokens after scale operands"
 	case cmd.Sep != "" && cmd.Unit != "":
-		return fail("cannot specify a unit with a box or fraction")
-	case cmd.IsMax && (decimal || cmd.Sep == "/" || cmd.Sep == "" && cmd.Unit == ""):
-		return fail("scale max requires an integer width, height, or box")
+		return "cannot specify a unit with a box or fraction"
+	case cmd.IsMax && (!isScaleInteger(cmd.Lhs) || cmd.Sep == "/" || cmd.Sep == "" && cmd.Unit == ""):
+		return "scale max requires an integer width, height, or box"
 	}
 	// Preserve the established AST representation of a bare full decimal.
 	if cmd.Unit == "" && cmd.Sep == "" {
@@ -131,7 +197,7 @@ func (p *Parser) parseScale(start tokenizer.Token) *ast.ScaleCommand {
 			cmd.Lhs, cmd.Sep, cmd.Rhs = lhs, ".", rhs
 		}
 	}
-	return cmd
+	return ""
 }
 
 func (p *Parser) parseSetCommand() *ast.SetCommand {
