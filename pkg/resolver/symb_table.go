@@ -14,8 +14,10 @@ type SymbolTable struct {
 	Notes         []*ast.Note // Floating or unlinked notes
 
 	// Lookup by identifier, alias, or qualified name
-	lookup  map[string]*EntitySymbol
-	partial bool
+	lookup           map[string]*EntitySymbol
+	partial          bool
+	packageSeparator string
+	declarations     *SymbolTable // Temporary index for references to later declarations.
 }
 
 func (tbl *SymbolTable) Lookup(name string) *EntitySymbol {
