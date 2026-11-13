@@ -10,75 +10,23 @@ import (
 )
 
 func (p *Parser) parseVisibilityCommand(tok tokenizer.Token) *ast.VisibilityCommand {
-	cmd := &ast.VisibilityCommand{}
-	switch keyword.Classify(tok.Literal) {
-	case keyword.Hide:
-		cmd.Kind = ast.VisibilityCMDHide
-	case keyword.Show:
-		cmd.Kind = ast.VisibilityCMDShow
-	case keyword.Remove:
-		cmd.Kind = ast.VisibilityCMDRemove
-	case keyword.Restore:
-		cmd.Kind = ast.VisibilityCMDRestore
-	default:
-		panic("visibility command: unreachable")
-	}
-	cmd.Target = p.stream.ReadUntilNewline()
-	if len(cmd.Target) == 0 {
-		nextTok := p.stream.PeekTokenAt(0)
-		p.recordError(nextTok, cmd, "empty target for visibility command")
-	}
+	line := p.commandLine()
+	target := p.stream.SliceInputEnclosingTokens(line.tokens...)
+	cmd, problem := parseVisibilityLine(keyword.Classify(tok.Literal), target, line.end)
+	p.recordCommandProblem(cmd, problem)
 	return cmd
 }
 
 func (p *Parser) parseDiagDirection(tok tokenizer.Token) *ast.DirectionCommand {
-	var to string
-	switch tok.Literal {
-	case "left":
-		to = "right"
-	case "top":
-		to = "bottom"
-	}
-
-	expectedSeq := []tokenizer.Token{
-		{
-			Type:    tokenizer.IDENTIFIER,
-			Literal: "to",
-		},
-		{
-			Type:    tokenizer.IDENTIFIER,
-			Literal: to,
-		},
-		{
-			Type:    tokenizer.IDENTIFIER,
-			Literal: "direction",
-		},
-	}
-
-	cmd := &ast.DirectionCommand{}
-
-	for _, token := range expectedSeq {
-		if _, ok := p.stream.TryConsume(token); ok {
-			continue
-		}
-
-		nextToken := p.stream.PeekTokenAt(0)
-		p.recordError(nextToken, cmd, "Unexpected diagram direction modifier")
-		p.syncToLineEnd()
-		return cmd
-	}
-	switch tok.Literal {
-	case "left":
-		cmd.Direction = ast.LeftToRightDirection
-	case "top":
-		cmd.Direction = ast.TopToBottomDirection
-	}
-	if !p.stream.AssertType(tokenizer.NEWLINE) {
-		nextToken := p.stream.PeekTokenAt(0)
-		p.recordError(nextToken, cmd, "Unexpected tokens after direction command")
-		p.syncToLineEnd()
-	}
+	cmd, problem := parseDirectionLine(tok, p.commandLine())
+	p.recordCommandProblem(cmd, problem)
 	return cmd
+}
+
+func (p *Parser) recordCommandProblem(cmd ast.Statement, problem *commandProblem) {
+	if problem != nil {
+		p.recordError(problem.token, cmd, problem.message)
+	}
 }
 
 // Scale operands are unsigned decimal literals. Extract them from the source
@@ -126,26 +74,16 @@ func (p *Parser) parseScale(start tokenizer.Token) *ast.ScaleCommand {
 }
 
 func (p *Parser) parseSetCommand() *ast.SetCommand {
-	keyTok := p.stream.Emit() // consume "separator"
-
-	toks := p.stream.ConsumeUntilType(tokenizer.NEWLINE)
-	var sb strings.Builder
-	for _, t := range toks {
-		sb.WriteString(t.Literal)
-	}
-	directiveVal := sb.String()
-	if keyTok.Literal == "separator" {
-		if directiveVal == "none" {
+	cmd, problem := parseSetLine(p.commandLine())
+	p.recordCommandProblem(cmd, problem)
+	if problem == nil && cmd.Key == "separator" {
+		if cmd.Value == "none" {
 			p.stream.PackageSeparator = ""
 		} else {
-			p.stream.PackageSeparator = directiveVal
+			p.stream.PackageSeparator = cmd.Value
 		}
 	}
-
-	return &ast.SetCommand{
-		Key:   keyTok.Literal,
-		Value: directiveVal,
-	}
+	return cmd
 }
 
 func parseLayoutAlignmentToken(tok tokenizer.Token, blockKind ast.TextBlockKind) (horiz string, vert string, isAlign bool) {
