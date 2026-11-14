@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"slices"
 
-	"yur4uwe/pac/pkg/tokenizer/keyword"
 	"yur4uwe/pac/pkg/tokenizer"
+	"yur4uwe/pac/pkg/tokenizer/keyword"
 )
 
 // PeekRawTokenAt returns the idx-th token in the stream.
